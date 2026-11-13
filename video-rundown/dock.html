@@ -1,0 +1,1087 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Video Rundown</title>
+<style>
+:root{color-scheme:dark;background:#14171e;color:#edf2f8;font:13px system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0;padding:12px}main{max-width:700px;margin:auto}
+header,.bar,.transport,.clip{display:flex;align-items:center;gap:8px}
+header,.bar{justify-content:space-between;flex-wrap:wrap}h1{font-size:19px;margin:0}h2{font-size:12px;margin:0;color:#b8c5d6}
+button,input{font:inherit}button{background:#293445;color:#eff5ff;border:1px solid #43546d;border-radius:6px;padding:6px 10px;cursor:pointer}
+button:hover{background:#354968}button:disabled{opacity:.45;cursor:default}button.primary{background:#1d6050;border-color:#388775}
+.card{padding:10px;margin:9px 0;background:#202631;border:1px solid #333d4e;border-radius:9px}
+.badge{border-radius:12px;padding:3px 7px;background:#313b4a;font-size:11px;color:#d0dceb}.badge.live{background:#702d3b;color:#ffe5e9}
+#timing{font-variant-numeric:tabular-nums}#now{margin:7px 0 4px;overflow-wrap:anywhere;font-size:16px;font-weight:650}#timing,#message,small{color:#b7c5d6}
+progress{width:100%;height:6px;accent-color:#64d1b1}.transport{flex-wrap:wrap;margin-top:8px}
+#drop{padding:14px 8px;text-align:center;border:1px dashed #586d8c;border-radius:8px;margin:9px 0;color:#bbd5fa}
+#drop.drag{border-color:#69d8bc;background:#203c39}#drop button{margin-left:5px}
+#library-filters{display:flex;flex-wrap:wrap;gap:6px}
+#library-filters select{max-width:100%;min-width:0}
+#library-search{flex:1 1 125px;width:100%;min-width:0;color:inherit;background:#202631;border:1px solid #536886;border-radius:6px;padding:7px 9px}
+#library .clip,#removed .clip,#category-clips .clip{gap:5px}.library-number{min-width:2ch;text-align:right;color:#b7c5d6;font-variant-numeric:tabular-nums}#library .clip[hidden]{display:none}#library-no-results{color:#b7c5d6}
+.rename{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:5px}.rename input{flex:1;min-width:90px;color:inherit;background:#14171e;border:1px solid #536886;border-radius:5px;padding:5px}
+ol{padding:0;margin:6px 0 0;list-style:none}.clip{padding:5px 0;border-top:1px solid #30394a}
+.clip .pick{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.clip button[aria-current=true]{border-color:#76d4ba;color:#a8f1dc}.clip .icon{padding:5px 7px}.clip .grip{cursor:grab;color:#aebed3;touch-action:none}.clip .grip:active{cursor:grabbing}.clip.drop-before{box-shadow:inset 0 2px #76d4ba}.clip.drop-after{box-shadow:inset 0 -2px #76d4ba}
+.clip.on-air{background:#3d2530;border-top-color:#824353;border-left:3px solid #fa6b7f;padding-left:5px}
+.clip.on-air .pick{border-color:#bd586c;color:#ffe5e9}
+.clip.marker{color:#ffd395;background:#382f23}.marker-label{flex:1;font-size:12px}.air-label{color:#ffc0cb;font-size:10px;font-weight:700;white-space:nowrap}
+#rundown-tabs{display:flex;gap:6px;margin:9px 0;overflow-x:auto;scrollbar-width:thin;padding:2px}
+#rundown-tabs button{flex:none;white-space:nowrap}#rundown-tabs button[draggable=true]{cursor:grab}
+#rundown-tabs button.tab-dragging{opacity:.5}nav button[aria-pressed=true]{border-color:#76d4ba;color:#a8f1dc}
+select{font:inherit;color:inherit;background:#293445;border:1px solid #43546d;border-radius:6px;padding:5px}
+.airtime{font-size:10px;color:#adbbcd;white-space:nowrap}.clip .pick{display:grid}.clip .pick strong{overflow:hidden;text-overflow:ellipsis;font-weight:500}
+#library-menu,#row-menu{position:fixed;z-index:3;padding:4px;background:#202631;border:1px solid #43546d;border-radius:6px}
+#library-menu button{display:block;width:100%;text-align:left}#library-menu button[hidden]{display:none}#library-menu button+button{margin-top:4px}
+a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
+#playlist-toast{position:fixed;z-index:4;bottom:14px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);padding:8px 12px;border:1px solid #4d9c88;border-radius:8px;background:#223b35;color:#e0fff3;overflow-wrap:anywhere;pointer-events:none}
+#message{min-height:1.4em;margin:7px 0 0;overflow-wrap:anywhere}
+ .clip-action{flex:none;display:inline-grid;place-items:center;width:30px;height:30px;padding:0;font-size:16px;line-height:1}
+.clip-title{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clip-title > span{display:inline-block;vertical-align:bottom}
+#removed .clip-title{flex:1}
+.clip-metadata{color:#b7c5d6;font-size:10px;white-space:normal;overflow-wrap:anywhere}
+.clip-title.scrolling{text-overflow:clip}
+.clip-title.scrolling > span{animation:clip-scroll var(--scroll-time) linear infinite alternate}
+@keyframes clip-scroll{0%,12%{transform:translateX(0)}88%,100%{transform:translateX(var(--scroll-distance))}}
+@media(prefers-reduced-motion:reduce){.clip-title.scrolling > span{animation:none}}
+#confirm-dialog,#category-dialog{box-sizing:border-box;width:min(380px,calc(100% - 24px));max-height:calc(100% - 24px);padding:0;border:1px solid #445268;border-radius:18px;background:#202631;color:#edf2f8;box-shadow:0 20px 56px #05070ba6}
+#confirm-dialog::backdrop,#category-dialog::backdrop{background:#080b12a8;backdrop-filter:blur(3px)}
+#confirm-dialog[open],#category-dialog[open]{animation:category-enter 160ms ease-out}
+@keyframes category-enter{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){#confirm-dialog[open],#category-dialog[open]{animation:none}}
+#confirm-form,#category-form{display:grid;gap:9px;padding:19px}
+#confirm-title,#category-dialog-title{font-size:17px;color:inherit}
+#category-form label{margin-top:4px;color:#c4d2e4;font-size:12px}
+#category-name{width:100%;min-width:0;padding:9px 11px;color:inherit;background:#161b24;border:1px solid #52647e;border-radius:10px}
+#category-name:focus{outline:2px solid #75d7bd;outline-offset:1px}
+#category-existing{width:100%;padding:9px 11px;border-radius:10px}
+.category-actions #category-create-new{margin-right:auto}
+.category-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:5px}
+.category-actions button{border-radius:9px;padding:7px 13px}
+#category-status{margin:0;color:#ffc0c8;overflow-wrap:anywhere}
+#category-status:empty{display:none}
+</style>
+<body><main>
+<header><h1>Video Rundown</h1><span class="badge" id="program">Connecting</span></header>
+<section class="card" aria-label="Playback">
+<div class="bar"><h2>PLAYBACK</h2><button id="setup">Set up scene</button></div>
+<div id="now">No clip on air</div><div id="timing"></div><progress max="1" value="0" aria-label="Playback progress"></progress>
+<div class="transport">
+<button id="play" class="primary">Play selected</button><button id="pause">Pause</button><button id="stop">Stop</button><button id="next">Play next</button>
+<label><input id="auto" type="checkbox"> Auto-advance</label>
+</div>
+<div class="transport">
+<label>Auto-cut to Preview <select id="auto-cut"><option value="off">Off</option><option value="clip">After current clip</option><option value="rundown">After all clips</option></select></label>
+<button id="cut" disabled>Cut to Preview</button>
+</div>
+<small id="cut-target"></small></section>
+<nav id="rundown-tabs" aria-label="Rundown views"><button id="tab-queue">Playlist</button><button id="tab-library">File Library</button><button id="tab-categories">Categories</button><button id="tab-removed">Removed Videos</button><button id="tab-history">History</button><button id="tab-backups">Backups</button></nav>
+<section id="pane-queue"><div class="bar"><h2>PLAYLIST</h2><small id="count"></small></div>
+<ol id="queue"></ol><p id="queue-drop">Drop a library file here to add it.</p></section>
+<section id="pane-library" hidden><div id="drop">Drop video files here <button id="browse">Add files</button>
+<input id="files" type="file" accept=".mp4,.ts,.mov,.flv,.mkv,.avi,.gif,.webm" multiple hidden></div>
+<div id="library-filters">
+<input id="library-search" type="search" placeholder="Search clip names…" aria-label="Search File Library" aria-controls="library">
+<select id="library-category-filter" aria-label="Filter by category" aria-controls="library"><option value="">All categories</option></select>
+<select id="library-search-mode" aria-label="Search by" aria-controls="library"><option value="name">By clip name</option><option value="category">By category name</option></select>
+</div>
+<p id="metadata-upgrade" hidden>Restart the Video Rundown launcher to load full clip details.</p>
+<p id="library-no-results" role="status" hidden>No clips match your search.</p>
+<ol id="library"></ol></section>
+<section id="pane-categories" hidden>
+<div class="bar">
+<label>Category <select id="category-select"></select></label>
+<div><button type="button" id="category-new">New Category</button>
+<button type="button" id="category-rename" title="Rename category" aria-label="Rename category" disabled>✎</button>
+<button type="button" id="category-delete" title="Delete category" aria-label="Delete category" disabled>🗑︎</button></div>
+</div>
+<p id="category-empty" hidden>Use a clip’s menu in File Library to add it to a category.</p>
+<ol id="category-clips"></ol></section>
+<dialog id="category-dialog" aria-labelledby="category-dialog-title"><form id="category-form">
+<h2 id="category-dialog-title">New Category</h2>
+<label id="category-existing-label" for="category-existing" hidden>Category</label>
+<select id="category-existing" hidden></select>
+<label id="category-name-label" for="category-name">Category name</label>
+<input id="category-name" maxlength="60" placeholder="e.g. Open Movies" required>
+<p id="category-delete-prompt" hidden></p>
+<p id="category-status" role="status"></p>
+<div class="category-actions"><button type="button" id="category-create-new" hidden>New Category</button><button type="button" id="category-cancel">Cancel</button>
+<button type="submit" id="category-submit" class="primary">Create</button></div>
+</form></dialog>
+<section id="pane-removed" hidden>
+<ol id="removed"></ol><p id="removed-empty" hidden>No removed videos.</p>
+</section>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
+<form id="confirm-form" method="dialog">
+<h2 id="confirm-title"></h2><div id="confirm-detail"></div>
+<div class="category-actions"><button value="cancel" autofocus>Cancel</button>
+<button id="confirm-proceed" value="proceed"></button></div>
+</form></dialog>
+<section id="pane-history" hidden><div class="bar"><h2>PLAYBACK HISTORY</h2><button id="export-csv">Save CSV</button></div>
+<div class="bar"><label>Played on <input id="history-date" type="date"></label>
+<button id="history-clear-date" type="button">All dates</button></div>
+<p id="csv-result" role="status"></p><p id="history-empty" hidden></p><ol id="history"></ol></section>
+<section id="pane-backups" hidden>
+<div class="bar"><h2>LOCAL BACKUPS</h2><button id="backup-sqlite">Create SQLite backup</button></div>
+<button id="restore-file" type="button">Restore from file</button>
+<input id="restore-input" type="file" accept=".sqlite,.sqlite3,.db" hidden>
+<button id="find-missing" type="button">Search Missing Files</button>
+<input id="missing-folder" type="file" webkitdirectory multiple hidden>
+<input id="missing-file" type="file" hidden>
+<p id="missing-summary" role="status"></p><ul id="missing-list"></ul>
+<p><small>SQLite saves the playlist, library list, and history. Video files stay in the media cache.</small></p>
+<label for="backup-folder">Backup folder</label>
+<input id="backup-folder" readonly style="width:100%;margin:4px 0" onclick="this.select()">
+<p id="backup-result" role="status"></p><ol id="backup-list"></ol></section>
+<div id="library-menu" hidden><button id="library-rename">Rename</button><button id="library-category">Add to Category</button><button id="category-remove" hidden>Remove from Category</button><button id="library-remove">Remove from Library</button></div>
+<div id="row-menu" hidden><button id="stop-recue">Insert Stop &amp; Re-cue below</button></div>
+<p id="message" role="status"></p><div id="playlist-toast" role="status" hidden></div>
+</main>
+<script>
+const token = "__TOKEN__";
+const find = id => document.getElementById(id);
+const panes = ["queue", "library", "categories", "removed", "history", "backups"];
+let selected = null;
+let pane = "queue";
+let menuClip = null;
+let libraryKey = "", historyKey = "";
+
+const airFormat = new Intl.DateTimeFormat(undefined, {hour:"numeric", minute:"2-digit", second:"2-digit", hour12:true});
+const clipDate = new Intl.DateTimeFormat(undefined, {year:"numeric", month:"short", day:"numeric"});
+const historyFormat = new Intl.DateTimeFormat(undefined, {dateStyle:"short", timeStyle:"medium", hour12:true});
+function selectPane(name) {
+    closeLibraryMenu();
+    find("tab-" + name).scrollIntoView({block:"nearest", inline:"nearest"});
+    if (pane !== name) editing = null;
+    pane = name;
+    try { localStorage.setItem("rundown-active-tab", name); } catch {}
+    if (name === "backups") loadBackups();
+    for (const key of panes) {
+        find("pane-" + key).hidden = key !== name;
+        find("tab-" + key).setAttribute("aria-pressed", String(key === name));
+    }
+    if (last) renderLists(last);
+}
+async function loadBackups() {
+    try {
+        const response = await fetch("/backups", {cache:"no-store"});
+        if (!response.ok) throw new Error("Backup list unavailable.");
+        const data = await response.json();
+        find("backup-folder").value = data.folder;
+        const rows = data.files.map(file => {
+            const row = document.createElement("li");
+            row.textContent = file.name + " · " + Math.ceil(file.size / 1024) + " KB";
+            row.style.overflowWrap = "anywhere";
+            if (file.name.endsWith(".sqlite")) {
+                const restore = document.createElement("button");
+                restore.textContent = "Restore";
+                restore.onclick = () => confirmRestore(file.name, () => run("restore_backup", {name:file.name}));
+                row.append(" ", restore);
+            }
+            return row;
+        });
+        if (!rows.length) {
+            const empty = document.createElement("li");
+            empty.textContent = "No backups yet.";
+            rows.push(empty);
+        }
+        find("backup-list").replaceChildren(...rows);
+    } catch (error) { find("backup-result").textContent = error.message; }
+}
+async function saveExport(button, endpoint, result) {
+    button.disabled = true;
+    result.textContent = "Saving…";
+    try {
+        const response = await fetch(endpoint, {method:"POST", headers:{"X-Rundown":token}});
+        const item = await response.json();
+        if (!response.ok) throw new Error(item.error || "Could not save the file.");
+        result.textContent = "Saved " + item.name + " in Backups.";
+        result.title = item.path;
+        if (pane === "backups") await loadBackups();
+    } catch (error) { result.textContent = error.message; }
+    finally { button.disabled = false; }
+}
+find("export-csv").onclick = event => saveExport(event.currentTarget, "/export-csv", find("csv-result"));
+find("backup-sqlite").onclick = event => saveExport(event.currentTarget, "/backup-sqlite", find("backup-result"));
+function showRowMenu(event, id) {
+    event.preventDefault();
+    menuClip = id;
+    const menu = find("row-menu");
+    menu.hidden = false;
+    menu.style.left = Math.max(0, Math.min(event.clientX, innerWidth - menu.offsetWidth)) + "px";
+    menu.style.top = Math.max(0, Math.min(event.clientY, innerHeight - menu.offsetHeight)) + "px";
+    find("stop-recue").focus();
+}
+function drawEstimates() {
+    if (!last) return;
+    const current = last.queue.findIndex(item => item.id === last.current);
+    const active = last.program && ["Playing", "Paused", "Loading", "Opening"].includes(last.status);
+    const cue = last.queue.findIndex(item => item.id === last.next_cue);
+    let estimate = active ? last.schedule_anchor * 1000 || null : Date.now();
+    if (active && last.status === "Paused") estimate = Date.now() + Math.max(0, last.duration - last.cursor);
+    for (const row of find("queue").children) {
+        const label = row.querySelector(".airtime");
+        const index = last.queue.findIndex(item => item.id === row.dataset.id);
+        if (index >= 0 && last.queue[index].marker) { estimate = null; continue; }
+        if (!label || index < 0) continue;
+        const clip = last.queue[index];
+        if (active && index === current) {
+            label.textContent = last.air_started ? "Started " + airFormat.format(last.air_started * 1000) : "Starting…";
+        } else if (clip.played) {
+            label.textContent = "Played";
+        } else if ((active && index < current) || (!active && cue >= 0 && index < cue)) {
+            label.textContent = "Earlier in rundown";
+        } else {
+            label.textContent = estimate === null ? "ETA pending clip duration" : "Est. " + airFormat.format(estimate);
+            estimate = estimate !== null && clip.duration_ms ? estimate + clip.duration_ms : null;
+        }
+    }
+}
+const probed = new Map();
+let probing = false;
+async function probeDuration(items) {
+    if (probing) return;
+    const item = items.find(clip => (!clip.duration_ms || !clip.metadata?.width) && !probed.has(clip.id));
+    if (!item) return;
+    probing = true;
+    probed.set(item.id, {});
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    const duration = await new Promise(resolve => {
+        const timer = setTimeout(() => resolve(0), 5000);
+        const finish = value => { clearTimeout(timer); resolve(value); };
+        video.onloadedmetadata = () => {
+            probed.set(item.id, {width:video.videoWidth, height:video.videoHeight});
+            finish(video.duration);
+        };
+        video.onerror = () => finish(0);
+        video.src = "/clip/" + item.id;
+    });
+    video.removeAttribute("src");
+    video.load();
+    if (!item.duration_ms && Number.isFinite(duration) && duration > 0) {
+        try {
+            await post("/action", JSON.stringify({action:"duration", id:item.id, ms:Math.round(duration * 1000)}), {"Content-Type":"application/json"});
+        } catch { /* OBS can still discover duration during playback. */ }
+    }
+    probing = false;
+}
+function filterLibrary() {
+    const query = find("library-search").value.trim().toLocaleLowerCase();
+    const category = find("library-category-filter").value;
+    const byCategory = find("library-search-mode").value === "category";
+    let hasMatch = false;
+    for (const row of find("library").children) {
+        const categories = JSON.parse(row.dataset.categories);
+        const matchesQuery = !query || (byCategory
+            ? categories.some(name => name.toLocaleLowerCase().includes(query))
+            : row.dataset.searchName.includes(query));
+        row.hidden = !matchesQuery || (category !== "" && !categories.includes(category));
+        hasMatch ||= !row.hidden;
+    }
+    find("library-no-results").hidden = !(query || category) || hasMatch;
+}
+function clipAction(icon, label, onClick, type = "button") {
+    const button = document.createElement("button");
+    button.className = "clip-action";
+    button.type = type;
+    button.textContent = icon;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.onclick = onClick;
+    return button;
+}
+function clipTitle(label, target, tag = "span") {
+    const viewport = document.createElement(tag);
+    const text = document.createElement("span");
+    viewport.className = "clip-title";
+    viewport.title = label;
+    text.textContent = label;
+    viewport.append(text);
+    const trigger = target || viewport;
+    if (!target) trigger.tabIndex = 0;
+    function updateScroll() {
+        const distance = Math.ceil(text.getBoundingClientRect().width - viewport.clientWidth);
+        const scroll = distance > 0 && (trigger.matches(":hover") || trigger.matches(":focus-visible"));
+        viewport.style.setProperty("--scroll-distance", -distance + "px");
+        viewport.style.setProperty("--scroll-time", Math.max(2, distance / 32 + 1) + "s");
+        viewport.classList.toggle("scrolling", scroll);
+    }
+    for (const event of ["mouseenter", "mouseleave", "focus", "blur"]) {
+        trigger.addEventListener(event, updateScroll);
+    }
+    return viewport;
+}
+let libraryMenuButton, selectedCategory = "", categoryTarget, categoryEdit;
+function closeLibraryMenu(restoreFocus = false) {
+    find("library-menu").hidden = true;
+    if (libraryMenuButton) {
+        libraryMenuButton.setAttribute("aria-expanded", "false");
+        if (restoreFocus) libraryMenuButton.focus();
+        libraryMenuButton = null;
+    }
+}
+function openLibraryMenu(button, item, rename, category) {
+    const wasOpen = libraryMenuButton === button;
+    closeLibraryMenu();
+    if (wasOpen) return;
+    const menu = find("library-menu");
+    libraryMenuButton = button;
+    button.setAttribute("aria-expanded", "true");
+    find("library-rename").onclick = () => { closeLibraryMenu(); rename(); };
+    find("library-category").onclick = () => {
+        closeLibraryMenu();
+        showCategoryDialog(item.id);
+    };
+    find("category-remove").hidden = !category;
+    find("category-remove").onclick = () => {
+        closeLibraryMenu(true);
+        confirmAction("Remove from Category", "Remove “" + item.name + "” from “" + category + "”?", "remove_category", {id:item.id, category});
+    };
+    find("library-remove").onclick = () => {
+        closeLibraryMenu(true);
+        confirmAction("Remove from Library", "Move “" + item.name + "” to Removed Videos?", "remove_media", {id:item.id});
+    };
+    menu.hidden = false;
+    const box = button.getBoundingClientRect();
+    menu.style.left = Math.max(0, box.right - menu.offsetWidth) + "px";
+    menu.style.top = Math.max(0, box.bottom + menu.offsetHeight <= window.innerHeight
+        ? box.bottom : box.top - menu.offsetHeight) + "px";
+    find("library-rename").focus({preventScroll:true});
+}
+function setCategoryDialogMode(create) {
+    const picker = find("category-existing");
+    const input = find("category-name");
+    picker.hidden = picker.disabled = find("category-existing-label").hidden = create;
+    input.hidden = input.disabled = find("category-name-label").hidden = !create;
+    find("category-create-new").hidden = create;
+    find("category-dialog-title").textContent = create ? "New Category" : "Add to Category";
+    find("category-submit").textContent = create ? (categoryTarget ? "Create and Add" : "Create") : "Add";
+    find("category-status").textContent = "";
+}
+function showCategoryDialog(clipId = null) {
+    categoryTarget = clipId;
+    categoryEdit = null;
+    find("category-delete-prompt").hidden = true;
+    const picker = find("category-existing");
+    const names = [...find("category-select").options].map(option => option.value);
+    picker.replaceChildren(...names.map(name => new Option(name, name)));
+    picker.value = names.includes(selectedCategory) ? selectedCategory : names[0] || "";
+    find("category-name").value = "";
+    setCategoryDialogMode(!clipId || !names.length);
+    find("category-dialog").showModal();
+    (picker.hidden ? find("category-name") : picker).focus();
+}
+function renderLists(state) {
+    const library = state.library || [], removed = state.removed || [];
+    renderMissing([...library, ...removed]);
+    const categories = [...new Set([...(state.categories || []), ...library.flatMap(item => item.categories || [])])].sort((a, b) => a.localeCompare(b));
+    if (!categories.includes(selectedCategory)) selectedCategory = categories[0] || "";
+    const key = JSON.stringify([
+        ...[library, removed].map(clips => clips.map(({duration_ms, metadata, ...clip}) => clip)),
+        categories, editing, selectedCategory, pane === "categories"
+    ]);
+    if (key !== libraryKey) {
+        closeLibraryMenu();
+        libraryKey = key;
+        const filter = find("library-category-filter");
+        const previousFilter = filter.value;
+        filter.replaceChildren(new Option("All categories", ""), ...categories.map(name => new Option(name, name)));
+        filter.value = categories.includes(previousFilter) ? previousFilter : "";
+        const options = categories.map(name => new Option(name, name));
+        const select = find("category-select");
+        select.replaceChildren(...options);
+        select.value = selectedCategory;
+        select.disabled = !categories.length;
+        find("category-rename").disabled = find("category-delete").disabled = select.disabled;
+        const categorized = library.filter(item => item.categories?.includes(selectedCategory));
+        const emptyCategory = find("category-empty");
+        emptyCategory.hidden = categorized.length > 0;
+        emptyCategory.textContent = selectedCategory ? "No clips in this category." : "Create a category to get started.";
+        for (const [list, clips] of [["library", library], ["removed", removed], ["category-clips", categorized]]) {
+            const isRemoved = list === "removed";
+            find(list).replaceChildren(...clips.map((item, index) => {
+                const row = document.createElement("li");
+                row.className = "clip";
+                row.dataset.searchName = item.name.toLocaleLowerCase();
+                row.dataset.categories = JSON.stringify(item.categories || []);
+                if (!isRemoved) {
+                    const number = document.createElement("span");
+                    number.className = "library-number";
+                    number.textContent = (index + 1) + ".";
+                    row.append(number);
+                }
+                if (editing === item.id && (pane === "categories" ? list === "category-clips" : list !== "category-clips")) {
+                    const form = document.createElement("form");
+                    form.className = "rename";
+                    const input = document.createElement("input");
+                    input.value = draft;
+                    input.maxLength = 160;
+                    input.required = true;
+                    input.setAttribute("aria-label", "Clip name");
+                    input.oninput = () => { draft = input.value; };
+                    const close = () => { editing = null; render(last); };
+                    const save = clipAction("✓", "Save", null, "submit");
+                    const cancel = clipAction("×", "Cancel", close);
+                    form.onkeydown = event => { if (event.key === "Escape") close(); };
+                    form.onsubmit = async event => {
+                        event.preventDefault();
+                        if (!input.value.trim()) return;
+                        if (await run("rename", {id: item.id, title: input.value})) close();
+                    };
+                    form.append(input, save, cancel);
+                    row.append(form);
+                    requestAnimationFrame(() => { if (input.isConnected) { input.focus(); input.select(); } });
+                    return row;
+                }
+                const rename = () => {
+                    editing = item.id;
+                    draft = item.name;
+                    render(last);
+                };
+                if (isRemoved) {
+                    const title = clipTitle(item.name);
+                    const restore = clipAction("↶", "Restore", () => run("restore_media", {id:item.id}));
+                    const trash = clipAction("🗑︎", "Move to Trash", () => confirmAction(
+                        "Move to Trash", "Move “" + item.name + "” to your computer’s Trash or Recycle Bin?",
+                        "trash_media", {id:item.id}));
+                    row.append(title, clipAction("✎", "Rename", rename), restore, trash);
+                    return row;
+                }
+                row.draggable = true;
+                row.ondragstart = event => {
+                    event.dataTransfer.setData("application/x-rundown-media", item.id);
+                    event.dataTransfer.effectAllowed = "copy";
+                };
+                const name = document.createElement("button");
+                name.className = "pick";
+                const metadata = document.createElement("small");
+                metadata.className = "clip-metadata";
+                metadata.dataset.clipId = item.id;
+                const extension = item.metadata?.format || item.name.match(/\.(mp4|ts|mov|flv|mkv|avi|gif|webm)$/i)?.[1].toUpperCase();
+                const title = extension && item.name.toUpperCase().endsWith("." + extension)
+                    ? item.name.slice(0, -(extension.length + 1)) || item.name : item.name;
+                name.append(clipTitle(title, name), metadata);
+                name.title = item.name;
+                name.disabled = !!item.missing;
+                name.onclick = () => run("cue", {id:item.id});
+                const add = clipAction("+", "Add to Playlist", () => addToPlaylist(item.id));
+                add.disabled = !!item.missing;
+                const more = clipAction("⋯", "Clip actions", () => openLibraryMenu(more, item, rename, list === "category-clips" ? selectedCategory : ""));
+                more.setAttribute("aria-controls", "library-menu");
+                more.setAttribute("aria-expanded", "false");
+                row.append(name, add, more);
+                return row;
+            }));
+        }
+        find("removed-empty").hidden = removed.length > 0;
+        filterLibrary();
+    }
+    const libraryById = new Map(library.map(item => [item.id, item]));
+    for (const label of document.querySelectorAll("#library .clip-metadata, #category-clips .clip-metadata")) {
+        const clip = libraryById.get(label.dataset.clipId);
+        const {width, height, fps, format, codec, size_bytes, created_at, modified_at, cached_modified} = {...probed.get(clip.id), ...clip.metadata};
+        const details = [
+            clip.missing && "Missing file",
+            clip.duration_ms && clock(clip.duration_ms),
+            width && height && width + "×" + height,
+            fps && fps + " fps",
+            format || clip.name.match(/\.(mp4|ts|mov|flv|mkv|avi|gif|webm)$/i)?.[1].toUpperCase(),
+            codec?.toUpperCase(),
+            size_bytes && (size_bytes / 1024**2).toFixed(1) + " MB"
+        ].filter(Boolean).join(" · ") || "Reading video details…";
+        const dates = [
+            created_at && "Copy created " + clipDate.format(created_at * 1000),
+            modified_at && (cached_modified ? "Copy modified " : "Modified ") + clipDate.format(modified_at * 1000)
+        ].filter(Boolean).join(" · ");
+        const text = [details, dates].filter(Boolean).join(" · ");
+        if (label.textContent !== text) label.textContent = label.title = text;
+    }
+    renderHistory(state.history || []);
+    probeDuration(state.library || []);
+}
+function renderHistory(history) {
+    const date = find("history-date").value;
+    const entries = history.filter(item => {
+        if (!date) return true;
+        const played = new Date(item.started * 1000);
+        const localDate = [played.getFullYear(), String(played.getMonth() + 1).padStart(2, "0"),
+            String(played.getDate()).padStart(2, "0")].join("-");
+        return localDate === date;
+    });
+    const keyHistory = JSON.stringify([date, entries]);
+    if (keyHistory !== historyKey) {
+        historyKey = keyHistory;
+        const empty = find("history-empty");
+        empty.hidden = entries.length > 0;
+        empty.textContent = date ? "No clips played on this date." : "No playback history yet.";
+        find("history").replaceChildren(...entries.slice().reverse().map(item => {
+            const row = document.createElement("li");
+            const name = document.createElement("strong");
+            name.textContent = item.name;
+            const times = document.createElement("div");
+            times.className = "airtime";
+            times.textContent = historyFormat.format(item.started * 1000) + " → " +
+                historyFormat.format(item.ended * 1000) + " · " + item.result;
+            row.append(name, times);
+            return row;
+        }));
+    }
+}
+find("history-date").oninput = () => renderHistory(last?.history || []);
+find("history-clear-date").onclick = () => {
+    find("history-date").value = "";
+    renderHistory(last?.history || []);
+};
+let drag = null;
+function clearDrop() {
+    document.querySelectorAll(".drop-before,.drop-after").forEach(row => row.classList.remove("drop-before","drop-after"));
+}
+function dropTarget(event) {
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest(".clip");
+    if (!row || row.dataset.id === drag?.id) return null;
+    const box = row.getBoundingClientRect();
+    return {row, after: event.clientY > box.top + box.height / 2};
+}
+function bindGrip(handle, item, index, queue) {
+    handle.onpointerdown = event => {
+        if (event.button !== 0 || drag || busy) return;
+        drag = {id:item.id, pointer:event.pointerId};
+        handle.setPointerCapture(event.pointerId);
+    };
+    handle.onpointermove = event => {
+        if (drag?.pointer !== event.pointerId) return;
+        clearDrop();
+        const target = dropTarget(event);
+        if (target) target.row.classList.add(target.after ? "drop-after" : "drop-before");
+    };
+    handle.onpointerup = event => {
+        if (drag?.pointer !== event.pointerId) return;
+        const target = dropTarget(event);
+        drag = null;
+        clearDrop();
+        if (target) run("move", {id:item.id, target:target.row.dataset.id, after:target.after});
+    };
+    handle.onlostpointercapture = () => { drag = null; clearDrop(); };
+    handle.onkeydown = async event => {
+        if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const after = event.key === "ArrowDown";
+        const other = queue[index + (after ? 1 : -1)];
+        if (other && await run("move", {id:item.id, target:other.id, after})) {
+            [...find("queue").children].find(row => row.dataset.id === item.id)?.querySelector(".grip")?.focus();
+        }
+    };
+}
+let editing = null;
+let draft = "";
+let last = null;
+let queueKey = "";
+let error = "";
+let busy = false;
+let uploading = false;
+let sampledAt = 0;
+
+function clock(ms) {
+    const value = Math.max(0, Math.floor(ms));
+    const seconds = Math.floor(value / 1000);
+    return String(Math.floor(seconds / 60)).padStart(2, "0") + ":" +
+        String(seconds % 60).padStart(2, "0") + "." + String(value % 1000).padStart(3, "0");
+}
+
+async function post(path, body, headers = {}) {
+    const response = await fetch(path, {
+        method: "POST", headers: {"X-Rundown": token, ...headers}, body
+    });
+    if (!response.ok) throw new Error((await response.json()).error || "Request rejected.");
+}
+
+function drawTime(now) {
+    if (!last?.current) return;
+    const delta = last.program && last.status === "Playing" ? Math.min(650, Math.max(0, now - sampledAt)) : 0;
+    const cursor = last.duration ? Math.min(last.duration, last.cursor + delta) : last.cursor;
+    find("timing").textContent = last.status + " · " + clock(cursor) + " / " + clock(last.duration) +
+        " · " + clock(last.duration - cursor) + " remaining";
+    document.querySelector("progress").value = last.duration ? cursor / last.duration : 0;
+}
+
+function render(state) {
+    if (state !== last) sampledAt = performance.now() - (state.sample_age_ms || 0);
+    last = state;
+    if (!state.queue.some(clip => clip.id === selected && !clip.marker)) selected = state.queue.find(clip => clip.id === state.next_cue && !clip.marker)?.id ?? state.queue.find(clip => !clip.marker)?.id ?? null;
+    const clip = state.queue.find(clip => clip.id === state.current);
+    const onAir = state.program && clip && ["Playing", "Paused", "Loading", "Opening", "Buffering"].includes(state.status);
+    find("program").textContent = onAir ? "ON AIR" : state.program ? "Program ready" : "Scene off Program";
+    find("program").classList.toggle("live", Boolean(onAir));
+    find("now").textContent = clip ? clip.name : "No clip on air";
+    if (clip) drawTime(performance.now());
+    else {
+        find("timing").textContent = "";
+        document.querySelector("progress").value = 0;
+    }
+    find("setup").hidden = state.ready;
+    find("auto").checked = state.auto;
+    find("auto-cut").value = state.auto_cut || "off";
+    const target = state.preview && state.preview !== "Video Rundown" ? state.preview : null;
+    find("cut").disabled = busy || !state.return_ready || !state.program || !target;
+    find("cut-target").textContent = state.handoff || (target ? "OBS Preview: " + target : "Select a different Preview scene in Studio Mode.");
+    if (state.return_ready && state.auto_cut === "off" && target) {
+        find("cut-target").textContent += " · Ready to cut";
+    }
+    find("play").disabled = busy || !state.ready || !state.program || !selected;
+    find("next").disabled = busy || !state.ready || !state.program || !state.queue.some((item, i) => item.id === state.next_cue || (!item.marker && !item.played && i > state.queue.findIndex(row => row.id === state.current)));
+    find("pause").textContent = state.status === "Paused" ? "Resume" : "Pause";
+    find("pause").disabled = busy || !["Playing", "Paused"].includes(state.status) || !clip;
+    find("stop").disabled = busy || !clip;
+    find("count").textContent = state.queue.length + (state.queue.length === 1 ? " clip" : " clips");
+    const key = JSON.stringify([state.queue.map(({duration_ms, ...clip}) => clip), state.current, Boolean(onAir), selected]);
+    if (key !== queueKey && !drag) {
+        queueKey = key;
+        find("queue").replaceChildren(...state.queue.map((item, i) => {
+            const row = document.createElement("li");
+            row.className = "clip";
+            row.dataset.id = item.id;
+            if (item.marker) {
+                row.classList.add("marker");
+                const handle = document.createElement("button");
+                handle.className = "icon grip";
+                handle.textContent = "☰";
+                handle.setAttribute("aria-label", "Move Stop & Re-cue marker");
+                bindGrip(handle, item, i, state.queue);
+                const label = document.createElement("span");
+                label.className = "marker-label";
+                label.textContent = "Stop & Re-cue after the clip above";
+                const remove = document.createElement("button");
+                remove.textContent = "×";
+                remove.setAttribute("aria-label", "Remove Stop & Re-cue marker");
+                remove.onclick = () => confirmAction("Remove Stop & Re-cue", "The playlist can advance past this point after the marker is removed.", "remove", {id:item.id});
+                row.append(handle, label, remove);
+                return row;
+            }
+            row.oncontextmenu = event => showRowMenu(event, item.id);
+            const current = item.id === state.current;
+            const live = current && onAir;
+            row.classList.toggle("on-air", Boolean(live));
+            const pick = document.createElement("button");
+            pick.className = "pick";
+            const name = clipTitle((i + 1) + ". " + item.name + (current && !live ? "  •  Current" : ""), pick, "strong");
+            const airtime = document.createElement("span");
+            airtime.className = "airtime";
+            pick.append(name, airtime);
+            pick.title = item.name;
+            pick.setAttribute("aria-current", String(item.id === selected));
+            pick.onclick = () => { selected = item.id; render(last); run("cue", {id: item.id}); };
+            const grip = document.createElement("button");
+            grip.className = "icon grip";
+            grip.textContent = "☰";
+            grip.title = "Drag to reorder, or focus and press Up or Down";
+            grip.setAttribute("aria-label", "Reorder " + item.name);
+            bindGrip(grip, item, i, state.queue);
+            row.append(grip, pick);
+            grip.disabled = current;
+            if (live) {
+                const liveLabel = document.createElement("span");
+                liveLabel.className = "air-label";
+                liveLabel.textContent = "ON AIR";
+                row.append(liveLabel);
+            }
+            const remove = document.createElement("button");
+            remove.className = "icon";
+            remove.textContent = "×";
+            remove.setAttribute("aria-label", "Remove " + item.name);
+            remove.disabled = current;
+            remove.title = current ? "Current clip is locked" : "Remove clip";
+            remove.onclick = () => confirmAction("Remove from Playlist", "Remove “" + item.name + "” from the Playlist?", "remove", {id:item.id});
+            row.append(remove);
+            return row;
+        }));
+    }
+    drawEstimates();
+    renderLists(state);
+    find("message").textContent = error || state.error || (uploading ? "Adding video files…" :
+        !state.ready ? "Set up the scene and its Media Source once." : !state.program ? "Switch Video Rundown to Program when you’re ready to play." : "");
+}
+
+async function refresh() {
+    try {
+        const response = await fetch("/state", {cache:"no-store"});
+        const state = await response.json();
+        find("metadata-upgrade").hidden = !state.library?.some(clip => !clip.metadata);
+        render(state);
+    } catch { find("message").textContent = "Video Rundown is offline."; }
+}
+
+function confirmRestore(name, restore) {
+    confirmAction("Restore Backup", "Restore “" + name + "”? This replaces the current library, playlist, categories, settings, and history. A safety backup is saved first.",
+        async () => {
+            if (await restore()) {
+                find("backup-result").textContent = "Backup restored.";
+                await loadBackups();
+            } else find("backup-result").textContent = error || "Restore failed.";
+        });
+}
+find("restore-file").onclick = () => find("restore-input").click();
+find("restore-input").onchange = event => {
+    const file = event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    confirmRestore(file.name, async () => {
+        if (busy) return false;
+        busy = true;
+        error = "";
+        try {
+            await post("/restore-upload", file);
+            return true;
+        } catch (e) { error = e.message; return false; }
+        finally { busy = false; await refresh(); }
+    });
+};
+let missingTarget, missingKey;
+function renderMissing(items) {
+    const missing = items.filter(item => item.missing);
+    const key = JSON.stringify(missing.map(item => [item.id, item.name]));
+    if (missingKey === key) return;
+    missingKey = key;
+    find("missing-summary").textContent = missing.length ? missing.length + " missing video files" : "No missing video files.";
+    find("find-missing").disabled = !missing.length;
+    find("missing-list").replaceChildren(...missing.map(item => {
+        const row = document.createElement("li");
+        row.textContent = (item.original_name || item.name) + " ";
+        const locate = document.createElement("button");
+        locate.textContent = "Locate…";
+        locate.onclick = () => { missingTarget = item; find("missing-file").click(); };
+        row.append(locate);
+        return row;
+    }));
+}
+async function relinkFile(item, file) {
+    await post("/relink", file, {"X-Clip-ID":item.id, "X-Clip-Name":encodeURIComponent(file.name)});
+}
+find("find-missing").onclick = () => find("missing-folder").click();
+find("missing-folder").onchange = async event => {
+    const files = [...event.target.files];
+    event.target.value = "";
+    if (!files.length) return;
+    const byName = new Map();
+    for (const file of files) {
+        const name = file.name.toLowerCase();
+        byName.set(name, byName.has(name) ? null : file);
+    }
+    let count = 0, failures = 0;
+    for (const item of [...(last?.library || []), ...(last?.removed || [])].filter(item => item.missing)) {
+        const file = byName.get((item.original_name || item.name).toLowerCase());
+        if (!file) continue;
+        try { await relinkFile(item, file); count++; } catch { failures++; }
+    }
+    await refresh();
+    find("backup-result").textContent = count + " files reconnected." +
+        (failures ? " " + failures + " could not be reconnected." : "") +
+        " Use Locate for remaining files or duplicate names.";
+};
+find("missing-file").onchange = async event => {
+    const file = event.target.files[0], item = missingTarget;
+    event.target.value = "";
+    if (!file || !item) return;
+    try {
+        await relinkFile(item, file);
+        await refresh();
+        find("backup-result").textContent = "Reconnected “" + item.name + "”.";
+    } catch (e) { find("backup-result").textContent = e.message; }
+};
+let pendingConfirmation;
+function confirmAction(label, detail, action, extra = {}, currentClip) {
+    const dialog = find("confirm-dialog");
+    if (busy || dialog.open) return;
+    pendingConfirmation = {action, extra, currentClip};
+    find("confirm-title").textContent = label;
+    find("confirm-detail").textContent = detail;
+    find("confirm-proceed").textContent = label;
+    dialog.returnValue = "cancel";
+    dialog.showModal();
+}
+find("confirm-dialog").onclose = event => {
+    const pending = pendingConfirmation;
+    pendingConfirmation = null;
+    if (event.currentTarget.returnValue !== "proceed" || !pending) return;
+    if (pending.currentClip !== undefined && pending.currentClip !== last?.current) {
+        find("message").textContent = "The on-air clip changed. Review the rundown and try again.";
+        return;
+    }
+    if (typeof pending.action === "function") pending.action();
+    else run(pending.action, pending.extra);
+};
+
+async function run(action, extra = {}) {
+    if (busy) return;
+    busy = true;
+    error = "";
+    if (last) render(last);
+    try { await post("/action", JSON.stringify({action, ...extra}), {"Content-Type":"application/json"}); return true; }
+    catch (e) { error = e.message; return false; }
+    finally { busy = false; await refresh(); }
+}
+
+async function add(files) {
+    if (uploading || !files.length) return;
+    selectPane("library");
+    uploading = true;
+    error = "";
+    if (last) render(last);
+    const failures = [];
+    try {
+        for (const file of files) {
+            try { await post("/upload", file, {"X-Clip-Name":encodeURIComponent(file.name), "X-Clip-Modified":String(file.lastModified)}); }
+            catch (e) { failures.push(file.name + " — " + e.message); }
+            await refresh();
+        }
+    } finally {
+        uploading = false;
+        error = failures.join(" · ");
+        find("files").value = "";
+        await refresh();
+    }
+}
+find("browse").onclick = () => find("files").click();
+find("files").onchange = e => add(e.target.files);
+let toastTimer;
+async function addToPlaylist(id, placement = {}) {
+    const item = last?.library.find(clip => clip.id === id);
+    const fromLibrary = pane === "library" || pane === "categories";
+    if (await run("enqueue", {id, ...placement}) && fromLibrary) {
+        const toast = find("playlist-toast");
+        toast.textContent = item ? "Added to Playlist: " + item.name : "Added to Playlist";
+        toast.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toast.hidden = true; }, 2500);
+    }
+}
+const mediaDrag = "application/x-rundown-media";
+window.addEventListener("dragover", event => {
+    const libraryDrag = event.dataTransfer.types.includes(mediaDrag);
+    if (!libraryDrag && !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+
+    if (!libraryDrag) find("drop").classList.add("drag");
+});
+window.addEventListener("dragleave", event => { if (!event.relatedTarget) find("drop").classList.remove("drag"); });
+window.addEventListener("drop", event => {
+    event.preventDefault();
+    find("drop").classList.remove("drag");
+    const id = event.dataTransfer.getData(mediaDrag);
+    if (id && (pane === "queue" || event.target.closest("#tab-queue"))) {
+        const row = event.target.closest("#queue .clip");
+        const box = row?.getBoundingClientRect();
+        addToPlaylist(id, {target:row?.dataset.id, after:box && event.clientY > box.top + box.height / 2});
+    } else if (!id) add(event.dataTransfer.files);
+});
+const tabs = find("rundown-tabs");
+const tabOrderKey = "rundown-tab-order";
+const tabDragType = "application/x-rundown-tab";
+let draggedTab = null, tabScroll = 0, tabScrollFrame = 0;
+try {
+    const savedOrder = JSON.parse(localStorage.getItem(tabOrderKey));
+    if (Array.isArray(savedOrder)) {
+        for (const key of new Set([...savedOrder, ...panes])) {
+            if (panes.includes(key)) tabs.append(find("tab-" + key));
+        }
+    }
+} catch {}
+function saveTabOrder() {
+    try {
+        localStorage.setItem(tabOrderKey, JSON.stringify([...tabs.children].map(tab => tab.id.slice(4))));
+    } catch {}
+}
+function scrollTabs() {
+    tabs.scrollLeft += tabScroll;
+    tabScrollFrame = requestAnimationFrame(scrollTabs);
+}
+function stopTabScroll() {
+    cancelAnimationFrame(tabScrollFrame);
+    tabScrollFrame = 0;
+    tabScroll = 0;
+}
+function hoverTabEdge(event) {
+    const {left, right} = tabs.getBoundingClientRect();
+    const edge = 24;
+    tabScroll = event.clientX < left + edge ? -4 : event.clientX > right - edge ? 4 : 0;
+    if (!tabScroll || tabs.scrollWidth <= tabs.clientWidth) stopTabScroll();
+    else if (!tabScrollFrame) tabScrollFrame = requestAnimationFrame(scrollTabs);
+}
+tabs.addEventListener("pointermove", hoverTabEdge);
+tabs.addEventListener("pointerleave", stopTabScroll);
+tabs.addEventListener("dragover", event => {
+    if (!draggedTab) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    hoverTabEdge(event);
+});
+tabs.addEventListener("dragleave", event => {
+    if (!tabs.contains(event.relatedTarget)) stopTabScroll();
+});
+tabs.addEventListener("drop", event => {
+    if (!draggedTab) return;
+    event.preventDefault();
+    event.stopPropagation();
+    stopTabScroll();
+    const target = [...tabs.children].find(tab => {
+        const box = tab.getBoundingClientRect();
+        return event.clientX < box.left + box.width / 2;
+    });
+    if (target !== draggedTab) tabs.insertBefore(draggedTab, target || null);
+    saveTabOrder();
+});
+for (const key of panes) {
+    const button = find("tab-" + key);
+    button.draggable = true;
+    button.title = "Drag to reorder or press Alt+Left/Right";
+    button.onclick = () => selectPane(key);
+    button.ondragstart = event => {
+        draggedTab = button;
+        button.classList.add("tab-dragging");
+        event.dataTransfer.setData(tabDragType, key);
+        event.dataTransfer.effectAllowed = "move";
+    };
+    button.ondragend = () => {
+        draggedTab = null;
+        button.classList.remove("tab-dragging");
+        stopTabScroll();
+    };
+    button.onkeydown = event => {
+        if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        const left = event.key === "ArrowLeft";
+        const neighbor = left ? button.previousElementSibling : button.nextElementSibling;
+        if (!neighbor) return;
+        event.preventDefault();
+        tabs.insertBefore(button, left ? neighbor : neighbor.nextElementSibling);
+        button.focus();
+        saveTabOrder();
+    };
+}
+find("category-select").onchange = event => {
+    selectedCategory = event.target.value;
+    renderLists(last);
+};
+find("category-new").onclick = () => showCategoryDialog();
+function editSelectedCategory(deleting) {
+    if (!selectedCategory) return;
+    showCategoryDialog();
+    categoryEdit = {name:selectedCategory, deleting};
+    const input = find("category-name");
+    input.value = selectedCategory;
+    input.hidden = input.disabled = find("category-name-label").hidden = deleting;
+    find("category-dialog-title").textContent = deleting ? "Delete Category" : "Rename Category";
+    find("category-submit").textContent = deleting ? "Delete" : "Save";
+    const prompt = find("category-delete-prompt");
+    prompt.hidden = !deleting;
+    prompt.textContent = 'Delete “' + selectedCategory + '”? Its clips will stay in the File Library.';
+    if (deleting) find("category-cancel").focus();
+    else input.select();
+}
+find("category-rename").onclick = () => editSelectedCategory(false);
+find("category-delete").onclick = () => editSelectedCategory(true);
+find("category-create-new").onclick = () => {
+    setCategoryDialogMode(true);
+    find("category-name").focus();
+};
+find("category-cancel").onclick = () => find("category-dialog").close();
+find("category-form").onsubmit = async event => {
+    event.preventDefault();
+    const submit = event.currentTarget.querySelector('button[type="submit"]');
+    if (busy || submit.disabled) return;
+    submit.disabled = true;
+    try {
+        if (categoryEdit) {
+            const {name, deleting} = categoryEdit;
+            const title = find("category-name").value.trim();
+            if (await run(deleting ? "delete_category" : "rename_category", {category:name, title})) {
+                if (!deleting && last) {
+                    selectedCategory = title;
+                    renderLists(last);
+                }
+                find("category-dialog").close();
+            } else find("category-status").textContent = error;
+            return;
+        }
+        const picker = find("category-existing");
+        const category = picker.disabled ? find("category-name").value.trim() : picker.value;
+        if (!category) {
+            find("category-status").textContent = "Enter or select a category.";
+            return;
+        }
+        const clipId = categoryTarget;
+        if (await run(clipId ? "add_category" : "create_category", {id:clipId, category})) {
+            if (!clipId && last) {
+                selectedCategory = (last.categories || []).find(name => name.toLowerCase() === category.toLowerCase()) || selectedCategory;
+                renderLists(last);
+            }
+            find("category-dialog").close();
+        } else find("category-status").textContent = error;
+    } finally {
+        submit.disabled = false;
+    }
+};
+find("library-search").addEventListener("input", filterLibrary);
+find("library-category-filter").onchange = filterLibrary;
+find("library-search-mode").onchange = event => {
+    find("library-search").placeholder = event.target.value === "category" ? "Search category names…" : "Search clip names…";
+    filterLibrary();
+};
+// Some OBS browser builds deliver two text insertions for one physical keypress.
+let typedKey;
+document.addEventListener("keydown", event => {
+    if (!event.target.matches('input[type="search"], input:not([type]), input[type="text"]') ||
+        event.key.length !== 1 || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
+    if (!typedKey || typedKey.target !== event.target || typedKey.code !== event.code ||
+        event.repeat || performance.now() - typedKey.time > 40) {
+        typedKey = {target:event.target, code:event.code, value:event.key, time:performance.now(), inserted:false};
+    }
+}, true);
+document.addEventListener("beforeinput", event => {
+    if (!typedKey || typedKey.target !== event.target || event.inputType !== "insertText" ||
+        event.isComposing || event.data !== typedKey.value || performance.now() - typedKey.time > 40) return;
+    if (typedKey.inserted) event.preventDefault();
+    else typedKey.inserted = true;
+}, true);
+document.addEventListener("keyup", event => {
+    if (typedKey?.code === event.code) typedKey = null;
+}, true);
+document.addEventListener("focusout", () => { typedKey = null; });
+
+document.addEventListener("pointerdown", event => {
+    if (!event.target.closest("#library-menu") && !libraryMenuButton?.contains(event.target)) closeLibraryMenu();
+});
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && libraryMenuButton) closeLibraryMenu(true);
+});
+window.addEventListener("resize", () => closeLibraryMenu());
+window.addEventListener("scroll", () => closeLibraryMenu());
+find("stop-recue").onclick = async () => {
+    find("row-menu").hidden = true;
+    if (await run("stop_recue", {id:menuClip})) {
+        render(last);
+    }
+};
+document.addEventListener("pointerdown", event => { if (!event.target.closest("#row-menu")) find("row-menu").hidden = true; });
+document.addEventListener("keydown", event => { if (event.key === "Escape") find("row-menu").hidden = true; });
+let savedPane;
+try { savedPane = localStorage.getItem("rundown-active-tab"); } catch {}
+selectPane(panes.includes(savedPane) ? savedPane : "queue");
+find("setup").onclick = () => run("setup");
+find("play").onclick = () => last?.current
+    ? confirmAction("Play Selected", "Replace the current on-air clip with the selected clip?", "play", {id:selected}, last.current)
+    : run("play", {id:selected});
+find("pause").onclick = () => run(last?.status === "Paused" ? "resume" : "pause");
+find("stop").onclick = () => confirmAction("Stop Playback", "Stop the current on-air clip?", "stop", {}, last?.current);
+find("next").onclick = () => last?.current
+    ? confirmAction("Play Next", "End the current on-air clip and start the next one?", "next", {}, last.current)
+    : run("next");
+find("auto").onchange = e => run("auto", {value:e.target.checked});
+find("auto-cut").onchange = e => run("auto_cut", {value:e.target.value});
+find("cut").onclick = () => confirmAction("Cut to Preview", "Switch the Preview scene to Program now?", "cut", {}, last?.current);
+refresh();
+setInterval(refresh, 500);
+setInterval(() => drawTime(performance.now()), 33);
+</script></body></html>

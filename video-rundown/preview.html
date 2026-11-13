@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rundown Preview</title>
+<style>
+:root{color-scheme:dark;background:#14171e;color:#edf2f8;font:13px system-ui,sans-serif}
+body{margin:0;padding:12px}header{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+h1{font-size:16px;margin:0 auto 0 0}button{font:inherit;padding:5px 8px;border:1px solid #46536a;border-radius:6px;background:#283244;color:inherit}
+button[aria-pressed=true]{border-color:#69cfb2;color:#a7f0da}
+video,img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#080a0f;margin-top:9px}
+#seek{width:100%;accent-color:#69cfb2} [hidden]{display:none}p{color:#b9c7d8;overflow-wrap:anywhere}
+</style>
+<body><header><h1>Rundown Preview</h1><button id="cue">Cue</button><button id="live">On Air</button></header>
+<video id="video" controls autoplay muted playsinline preload="metadata" hidden></video>
+<img id="frame" alt="OBS media source monitor" hidden><div id="scrubber" hidden><label for="seek">On Air timeline</label>
+<input type="range" id="seek" min="0" max="1" value="0" step="1">
+<output id="seek-time"></output><p id="seek-error" role="status"></p></div><p id="status" role="status"></p><p id="preview-metadata" hidden></p>
+<script>
+const el = id => document.getElementById(id);
+const video = el("video"), frame = el("frame");
+let mode = "cue", loaded, latest, framePending = false;
+const token = "__TOKEN__";
+const seek = el("seek");
+let scrubbing = false, seekClip, seeking = false;
+function timeLabel(ms) {
+    const seconds = Math.floor(ms / 1000);
+    return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2,"0") +
+        "." + String(Math.floor(ms % 1000)).padStart(3,"0");
+}
+seek.onpointerdown = () => { scrubbing = true; seekClip = latest?.current; };
+seek.onpointercancel = () => { scrubbing = false; seekClip = null; draw(); };
+seek.onpointerup = () => { scrubbing = false; };
+seek.oninput = () => { el("seek-time").textContent = timeLabel(Number(seek.value)); };
+seek.onchange = async () => {
+    if (seeking) return;
+    scrubbing = false;
+    seeking = true;
+    const id = seekClip || latest?.current;
+    seekClip = null;
+    el("seek-error").textContent = "";
+    try {
+        const response = await fetch("/action", {
+            method:"POST", headers:{"Content-Type":"application/json", "X-Rundown":token},
+            body:JSON.stringify({action:"seek", id, ms:Number(seek.value)})
+        });
+        if (!response.ok) throw new Error((await response.json()).error || "Seek failed.");
+        await refresh();
+    } catch (error) {
+        el("seek-error").textContent = error.message;
+    } finally {
+        seeking = false;
+        draw();
+    }
+};
+let observedCueRevision, lastCueRevision, cueStatus = "", playAttempt = 0;
+
+function playCue() {
+    const attempt = ++playAttempt;
+    cueStatus = "";
+    video.muted = true;
+    video.play().catch(error => {
+        if (attempt !== playAttempt || mode !== "cue" || error.name === "AbortError") return;
+        if (error.name === "NotAllowedError") cueStatus = " · Click Play to start the preview.";
+        draw();
+    });
+}
+function draw() {
+    const state = latest;
+    if (!state) return;
+    if (state.cue_revision !== observedCueRevision) {
+        observedCueRevision = state.cue_revision;
+        if (state.library?.some(item => item.id === state.cue)) mode = "cue";
+    }
+    el("cue").setAttribute("aria-pressed", mode === "cue");
+    el("live").setAttribute("aria-pressed", mode === "live");
+    const clip = [...state.queue, ...(state.library || [])].find(item => item.id === (mode === "cue" ? (state.cue || state.queue.find(item => !item.marker)?.id) : state.current));
+    const media = state.library?.find(item => item.id === (clip?.media_id || clip?.id));
+    const {width, height, fps, format, codec, size_bytes, created_at, modified_at, cached_modified} = media?.metadata || {};
+    const details = [
+        media?.missing && "Missing file",
+        clip?.duration_ms && timeLabel(clip.duration_ms),
+        width && height && width + "×" + height,
+        fps && fps + " fps", format, codec?.toUpperCase(),
+        size_bytes && (size_bytes / 1024**2).toFixed(1) + " MB",
+        created_at && "Copy created " + new Date(created_at * 1000).toLocaleDateString(),
+        modified_at && (cached_modified ? "Copy modified " : "Modified ") + new Date(modified_at * 1000).toLocaleDateString()
+    ].filter(Boolean).join(" · ");
+    const metadata = el("preview-metadata");
+    metadata.hidden = !details;
+    if (metadata.textContent !== details) metadata.textContent = details;
+    video.hidden = mode !== "cue" || !clip;
+    if (mode !== "cue") video.pause();
+    const freshCue = state.cue_revision !== lastCueRevision;
+    if (mode === "cue" && (clip?.id !== loaded || freshCue)) {
+        lastCueRevision = state.cue_revision;
+        cueStatus = "";
+        loaded = clip?.id;
+        if (loaded) {
+            video.src = "/clip/" + loaded;
+            playCue();
+        }
+        else { video.removeAttribute("src"); video.load(); }
+    }
+    const showFrame = mode === "live" && state.program && clip && ["Playing", "Paused"].includes(state.status);
+    el("scrubber").hidden = !showFrame || !state.duration;
+    seek.disabled = seeking || !showFrame || !state.duration;
+    if (!scrubbing && !seeking && showFrame && state.duration) {
+        seek.max = state.duration;
+        seek.value = state.cursor;
+        el("seek-time").textContent = timeLabel(state.cursor) + " / " + timeLabel(state.duration);
+    }
+    if (!showFrame) frame.hidden = true;
+    if (showFrame && !framePending) {
+        framePending = true;
+        frame.src = "/frame?t=" + Date.now();
+    }
+    el("status").textContent = clip ? clip.name + (mode === "live" ? " · Silent OBS monitor" : video.error ? " · Preview codec unavailable in this dock. OBS may still play it." : cueStatus)
+        : mode === "cue" ? "Select a clip in Video Rundown." : "No rundown clip on Program.";
+}
+frame.onload = () => { framePending = false; frame.hidden = mode !== "live" || !latest?.program || !["Playing","Paused"].includes(latest.status); };
+frame.onerror = () => { framePending = false; frame.hidden = true; };
+video.onerror = draw;
+el("cue").onclick = () => { if (mode !== "cue") loaded = undefined; mode = "cue"; draw(); };
+el("live").onclick = () => { mode = "live"; draw(); };
+async function refresh() {
+    try {
+        const response = await fetch("/state", {cache:"no-store"});
+        latest = await response.json();
+        draw();
+    } catch { el("status").textContent = "Video Rundown is offline."; }
+}
+refresh();
+setInterval(refresh, 450);
+</script></body></html>
