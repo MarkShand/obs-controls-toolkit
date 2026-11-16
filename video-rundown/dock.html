@@ -22,13 +22,18 @@ progress{width:100%;height:6px;accent-color:#64d1b1}.transport{flex-wrap:wrap;ma
 
 #folder-root{flex:1 1 140px}
 #folder-breadcrumb button,#folder-children button{overflow-wrap:anywhere;text-align:left}
-#folder-children li{margin:4px 0}
-#folder-children button{width:100%}
+#folder-children{list-style:none;margin:8px 0;padding:0}
+#folder-children li{display:flex;align-items:center;gap:6px;margin:4px 0}
+#folder-children .folder-child{flex:1;min-width:0}
+.folder-nav-button{display:inline-flex;align-items:center;gap:6px;max-width:100%}
+.folder-icon{position:relative;display:inline-block;flex:none;width:13px;height:9px;margin:2px 1px 0;border-radius:1px;background:#e9b75c;vertical-align:baseline}
+.folder-icon::before{content:"";position:absolute;left:0;top:-2px;width:6px;height:3px;border-radius:1px 2px 0 0;background:#e9b75c}
+.favorite-folder summary .folder-icon{margin-inline-end:6px}
 #folder-message,#folder-rename-error,#file-rename-notice{overflow-wrap:anywhere}
 #file-rename-notice:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid #5d7089;border-radius:6px}
 #file-rename-notice span{flex:1 1 165px}
 #folder-rename-error:empty{display:none}
-#folder-star[aria-pressed=true]{color:#ffd280}
+.folder-favorite[aria-pressed=true]{color:#ffd280}
 #favorites-list{list-style:none;padding:0;margin:8px 0}
 .favorite-folder{display:flex;align-items:flex-start;gap:6px;margin:6px 0}
 .favorite-folder details{flex:1;min-width:0}
@@ -55,8 +60,8 @@ progress{width:100%;height:6px;accent-color:#64d1b1}.transport{flex-wrap:wrap;ma
 #file-transfer:not([hidden]){display:grid;gap:4px;margin:6px 0}
 #file-transfer progress{height:8px}
 #file-destination-path{overflow-wrap:anywhere}
-#library-search,#favorites-search{flex:1 1 125px;width:100%;min-width:0;color:inherit;background:#202631;border:1px solid #536886;border-radius:6px;padding:7px 9px}
-#library .clip,#removed .clip,#folder-clips .clip{gap:5px}.library-number{min-width:2ch;text-align:right;color:#b7c5d6;font-variant-numeric:tabular-nums}#library .clip[hidden]{display:none}#library-no-results{color:#b7c5d6}
+#library-search,#favorites-search,#removed-search{flex:1 1 125px;width:100%;min-width:0;color:inherit;background:#202631;border:1px solid #536886;border-radius:6px;padding:7px 9px}
+#library .clip,#removed .clip,#folder-clips .clip{gap:5px}.library-number{min-width:2ch;text-align:right;color:#b7c5d6;font-variant-numeric:tabular-nums}#library .clip[hidden],#removed .clip[hidden]{display:none}#library-no-results{color:#b7c5d6}
 ol{padding:0;margin:6px 0 0;list-style:none}.clip{padding:5px 0;border-top:1px solid #30394a}
 .clip .pick{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .clip button[aria-current=true]{border-color:#76d4ba;color:#a8f1dc}.clip .icon{padding:5px 7px}.clip .grip{cursor:grab;color:#aebed3;touch-action:none}.clip .grip:active{cursor:grabbing}.clip.drop-before{box-shadow:inset 0 2px #76d4ba}.clip.drop-after{box-shadow:inset 0 -2px #76d4ba}
@@ -79,7 +84,9 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
  .clip-action{flex:none;display:inline-grid;place-items:center;width:30px;height:30px;padding:0;font-size:16px;line-height:1}
 .clip-title{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .clip-title > span{display:inline-block;vertical-align:bottom}
-#removed .clip-title{flex:1}
+#removed-tools:not([hidden]){display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0}
+#removed-tools label{display:flex;align-items:center;gap:5px}
+.removed-clip-info{flex:1;min-width:0;display:grid;gap:3px}
 .clip-metadata,.clip-path{color:#b7c5d6;font-size:10px;white-space:normal;overflow-wrap:anywhere}
 .clip-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .clip-title.scrolling{text-overflow:clip}
@@ -117,6 +124,7 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
 <label>Auto-cut to Preview <select id="auto-cut"><option value="off">Off</option><option value="clip">After current clip</option><option value="rundown">After all clips</option></select></label>
 <button id="cut" disabled>Cut to Preview</button>
 </div>
+<div class="transport"><label>When Rundown returns <select id="return-playback"><option value="restart">Restart clip</option><option value="continue">Continue where it left off</option></select></label></div>
 <small id="cut-target"></small></section>
 <div id="tab-strip">
 <button id="tabs-left" class="tab-arrow" type="button" aria-label="Scroll tabs left">‹</button>
@@ -134,12 +142,22 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
 </dialog>
 <section id="pane-queue"><div class="bar"><h2>PLAYLIST</h2><small id="count"></small></div>
 <ol id="queue"></ol><p id="queue-drop">Drop a library file here to add it.</p></section>
-<section id="pane-library" hidden><div id="drop">Drop a video or folder here <button id="link-folder">Link folder</button> <button id="link-file">Link file</button> <button id="browse">Upload copies</button>
-<input id="files" type="file" accept=".mp4,.ts,.mov,.flv,.mkv,.avi,.gif,.webm" multiple hidden></div>
+<section id="pane-library" hidden><div id="drop">Drop a video or folder here <button id="link-folder">Link folder</button> <button id="link-file">Link file</button>
+</div>
 <p id="folder-result" role="status" hidden></p>
 
 <div id="library-filters">
 <input id="library-search" type="search" placeholder="Search clip names…" aria-label="Search File Library" aria-controls="library">
+<label>Sort by <select id="library-sort" aria-controls="library">
+<option value="library">Library order</option>
+<option value="name-asc">Name A–Z</option>
+<option value="name-desc">Name Z–A</option>
+<option value="modified-desc">Modified newest</option>
+<option value="modified-asc">Modified oldest</option>
+<option value="duration-desc">Longest first</option>
+<option value="duration-asc">Shortest first</option>
+<option value="path">File path</option>
+</select></label>
 </div>
 <p id="metadata-upgrade" hidden>Restart the Video Rundown launcher to load full clip details.</p>
 <p id="library-no-results" role="status" hidden>No clips match your search.</p>
@@ -148,8 +166,8 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
 <div id="folder-tools"><select id="folder-root" aria-label="Linked folder"></select>
 <button id="folder-link-root" type="button">Link folder</button>
 <button id="folder-register" type="button" hidden>Use this folder</button>
+<button id="folder-unlink" type="button" hidden>Unlink folder</button>
 <button id="folder-refresh" type="button">Refresh folder</button>
-<button id="folder-star" type="button" aria-pressed="false" hidden>☆ Star folder</button>
 <button id="folder-rename" type="button">Rename folder on drive</button></div>
 <nav id="folder-breadcrumb" aria-label="Current folder"></nav>
 <p id="folder-message" role="status" hidden></p>
@@ -188,7 +206,13 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
 <button id="file-dialog-submit" type="submit" class="primary"></button></div>
 </form></dialog>
 <section id="pane-removed" hidden>
+<input id="removed-search" type="search" placeholder="Search removed videos…" aria-label="Search Removed Videos" aria-controls="removed">
+<div id="removed-tools" hidden>
+<label><input id="removed-select-all" type="checkbox"> <span id="removed-select-all-label">Select all</span></label>
+<button id="restore-selected" type="button" disabled>Restore selected</button>
+</div>
 <ol id="removed"></ol><p id="removed-empty" hidden>No removed videos.</p>
+<p id="removed-no-results" role="status" hidden>No removed videos match your search.</p>
 </section>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
 <form id="confirm-form" method="dialog">
@@ -209,10 +233,7 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
 <section id="pane-backups" hidden>
 <div class="bar"><h2>LOCAL BACKUPS</h2><button id="backup-json">Create JSON backup</button></div>
 <button id="restore-file" type="button">Restore from file</button>
-<input id="restore-input" type="file" accept=".json,.sqlite,.sqlite3,.db" hidden>
 <button id="find-missing" type="button">Search Missing Files</button>
-<input id="missing-folder" type="file" webkitdirectory multiple hidden>
-<input id="missing-file" type="file" hidden>
 <p id="missing-summary" role="status"></p><ul id="missing-list"></ul>
 <p><small>JSON saves the playlist, library paths, favorite folders, and history. Keep the media files separately.</small></p>
 <label for="backup-folder">Backup folder</label>
@@ -432,6 +453,92 @@ function openLibraryMenu(button, item) {
         ? box.bottom : box.top - menu.offsetHeight) + "px";
     find("library-rename").focus({preventScroll:true});
 }
+const selectedRemoved = new Set();
+let restoringRemoved = false;
+
+function matchingRemoved(items) {
+    const query = find("removed-search").value.trim().toLocaleLowerCase();
+    return items.filter(item => [item.name, item.original_name, item.file_path].some(
+        value => value?.toLocaleLowerCase().includes(query)));
+}
+
+function renderRemovedSelection(items) {
+    const ids = new Set(items.map(item => item.id));
+    for (const id of selectedRemoved) {
+        if (!ids.has(id)) selectedRemoved.delete(id);
+    }
+    const visible = new Set(matchingRemoved(items).map(item => item.id));
+    const selectedVisible = [...selectedRemoved].filter(id => visible.has(id)).length;
+    find("removed-tools").hidden = !ids.size;
+    find("removed-no-results").hidden = !ids.size || visible.size > 0;
+    const selectAll = find("removed-select-all");
+    selectAll.checked = visible.size > 0 && selectedVisible === visible.size;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visible.size;
+    selectAll.disabled = restoringRemoved || !visible.size;
+    find("removed-select-all-label").textContent = find("removed-search").value.trim() ? "Select all results" : "Select all";
+    const restore = find("restore-selected");
+    restore.disabled = restoringRemoved || !selectedRemoved.size;
+    restore.textContent = selectedRemoved.size ? "Restore selected (" + selectedRemoved.size + ")" : "Restore selected";
+    for (const row of find("removed").children) {
+        row.hidden = !visible.has(row.dataset.clipId);
+        const check = row.firstElementChild;
+        check.checked = selectedRemoved.has(row.dataset.clipId);
+        check.disabled = restoringRemoved;
+    }
+}
+
+find("removed-search").addEventListener("input", () => renderRemovedSelection(last?.removed || []));
+find("removed-select-all").onchange = event => {
+    const items = last?.removed || [];
+    for (const item of matchingRemoved(items)) {
+        if (event.target.checked) selectedRemoved.add(item.id);
+        else selectedRemoved.delete(item.id);
+    }
+    renderRemovedSelection(items);
+};
+
+async function restoreRemovedBatch(ids) {
+    try {
+        return await folderApi("/restore-removed", {ids});
+    } catch (err) {
+        if (!/^invalid request[.]?$/i.test(err.message)) throw err;
+        // A running helper may still serve the pre-batch API after a dock refresh.
+        let restored = 0;
+        const failed = [];
+        for (const id of ids) {
+            try {
+                await folderApi("/action", {action:"restore_media", id});
+                restored++;
+            } catch {
+                failed.push(id);
+            }
+        }
+        return {restored, failed};
+    }
+}
+
+find("restore-selected").onclick = async () => {
+    if (restoringRemoved || !selectedRemoved.size) return;
+    restoringRemoved = true;
+    const ids = [...selectedRemoved];
+    renderRemovedSelection(last?.removed || []);
+    try {
+        const result = await restoreRemovedBatch(ids);
+        const failed = new Set(result.failed || []);
+        for (const id of ids) {
+            if (!failed.has(id)) selectedRemoved.delete(id);
+        }
+        await refresh();
+        const message = result.restored + (result.restored === 1 ? " clip restored." : " clips restored.");
+        showToast(message + (failed.size ? " " + failed.size + " could not be restored. Restart OBS and retry." : ""));
+    } catch (err) {
+        showToast(err.message);
+    } finally {
+        restoringRemoved = false;
+        renderRemovedSelection(last?.removed || []);
+    }
+};
+
 function renderClipRow(item, index, isRemoved = false) {
     const row = document.createElement("li");
     row.className = "clip";
@@ -444,16 +551,30 @@ function renderClipRow(item, index, isRemoved = false) {
         row.append(number);
     }
     if (isRemoved) {
-        const title = clipTitle(item.name);
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.setAttribute("aria-label", "Select " + item.name + " to restore");
+        check.onchange = () => {
+            if (check.checked) selectedRemoved.add(item.id);
+            else selectedRemoved.delete(item.id);
+            renderRemovedSelection(last?.removed || []);
+        };
+        const info = document.createElement("div");
+        info.className = "removed-clip-info";
+        info.append(clipTitle(item.name));
+        if (item.file_path) {
+            const path = document.createElement("small");
+            path.className = "clip-path";
+            path.textContent = path.title = item.file_path;
+            info.append(path);
+        }
         const restore = clipAction("↶", "Restore", () => run("restore_media", {id:item.id}));
-        const removeLabel = item.linked ? "Forget link" : "Move to Trash";
-        const trash = clipAction(item.linked ? "×" : "🗑︎", removeLabel, () => confirmAction(
-            removeLabel, item.linked ? "Remove the library record for “" + item.name + "”?"
-                : "Move “" + item.name + "” to your computer’s Trash or Recycle Bin?",
-            "trash_media", {id:item.id}));
+        const forget = clipAction("×", "Forget library entry", () => confirmAction(
+            "Forget library entry", "Forget “" + item.name + "” from the library? Its file stays on the drive.",
+            "forget_media", {id:item.id}));
         const rename = clipAction("✎", "Rename file", () => openFileDialog(item, "rename"));
         rename.disabled = item.missing || !item.file_path;
-        row.append(title, rename, restore, trash);
+        row.append(check, info, rename, restore, forget);
         return row;
     }
     row.draggable = item.media_status === "ready";
@@ -488,8 +609,32 @@ function renderClipRow(item, index, isRemoved = false) {
     return row;
 }
 
+const libraryCollator = new Intl.Collator(undefined, {numeric:true, sensitivity:"base"});
+
+function sortLibrary(clips, mode) {
+    if (mode === "library") return clips;
+    const byName = (a, b) => libraryCollator.compare(a.name, b.name);
+    if (mode === "name-asc" || mode === "name-desc") {
+        return [...clips].sort(mode === "name-asc" ? byName : (a, b) => byName(b, a));
+    }
+    if (mode === "path") {
+        return [...clips].sort((a, b) => libraryCollator.compare(a.file_path || "", b.file_path || "") || byName(a, b));
+    }
+    const descending = mode.endsWith("-desc");
+    const value = mode.startsWith("modified")
+        ? clip => clip.metadata?.modified_at
+        : clip => clip.duration_ms > 0 ? clip.duration_ms : undefined;
+    return [...clips].sort((a, b) => {
+        const first = value(a), second = value(b);
+        if (!Number.isFinite(first)) return Number.isFinite(second) ? 1 : byName(a, b);
+        if (!Number.isFinite(second)) return -1;
+        return (descending ? second - first : first - second) || byName(a, b);
+    });
+}
+
 function renderLists(state) {
     const library = state.library || [], removed = state.removed || [];
+    const sortedLibrary = sortLibrary(library, find("library-sort").value);
     libraryClips = new Map(library.map(item => [item.id, item]));
     renderFolderRoots(state.folders || []);
     renderFileRename(state.renames || []);
@@ -499,19 +644,20 @@ function renderLists(state) {
     const folderClips = folderListing ? clipsInFolder(library, folderRoot, folderParts) : [];
     find("folder-empty").hidden = !folderListing || folderClips.length > 0;
     const key = JSON.stringify([
-        ...[library, removed].map(clips => clips.map(({duration_ms, metadata, ...clip}) => clip)),
+        ...[sortedLibrary, removed].map(clips => clips.map(({duration_ms, metadata, ...clip}) => clip)),
         folderClips.map(clip => clip.id)
     ]);
     if (key !== libraryKey) {
         closeLibraryMenu();
         libraryKey = key;
-        for (const [list, clips] of [["library", library], ["folder-clips", folderClips], ["removed", removed]]) {
+        for (const [list, clips] of [["library", sortedLibrary], ["folder-clips", folderClips], ["removed", removed]]) {
             const isRemoved = list === "removed";
             find(list).replaceChildren(...clips.map((item, index) => renderClipRow(item, index, isRemoved)));
         }
         find("removed-empty").hidden = removed.length > 0;
         filterLibrary();
     }
+    renderRemovedSelection(removed);
     for (const label of document.querySelectorAll("#library .clip-metadata, #folder-clips .clip-metadata, #favorites-list .clip-metadata")) {
         const clip = libraryClips.get(label.dataset.clipId);
         const {width, height, fps, format, codec, size_bytes, created_at, modified_at, cached_modified} = {...probed.get(clip.id), ...clip.metadata};
@@ -615,7 +761,6 @@ let last = null;
 let queueKey = "";
 let error = "";
 let busy = false;
-let uploading = false;
 let sampledAt = 0;
 
 function clock(ms) {
@@ -651,18 +796,21 @@ function render(state) {
     const onAir = state.program && clip && ["Playing", "Paused", "Loading", "Opening", "Buffering"].includes(state.status);
     find("program").textContent = onAir ? "ON AIR" : state.program ? "Program ready" : "Scene off Program";
     find("program").classList.toggle("live", Boolean(onAir));
-    find("now").textContent = clip ? clip.name : "No clip on air";
+    const interrupted = state.queue.find(item => item.id === state.interrupted?.id);
+    find("now").textContent = clip ? clip.name : interrupted ? interrupted.name + " · Taken off air" : "No clip on air";
     if (clip) drawTime(performance.now());
     else {
-        find("timing").textContent = "";
+        find("timing").textContent = interrupted && state.return_playback === "continue"
+            ? "Continue at " + clock(state.interrupted.cursor) : "";
         document.querySelector("progress").value = 0;
     }
     find("setup").hidden = state.ready;
     find("setup").textContent = state.setup_existing ? "Use existing scene" : "Set up scene";
     find("auto").checked = state.auto;
     find("auto-cut").value = state.auto_cut || "off";
+    find("return-playback").value = state.return_playback || "restart";
     const target = state.preview && state.preview !== "Video Rundown" ? state.preview : null;
-    find("cut").disabled = busy || !state.return_ready || !state.program || !target;
+    find("cut").disabled = busy || !(state.return_ready || onAir) || !state.program || !target;
     find("cut-target").textContent = state.handoff || (target ? "OBS Preview: " + target : "Select a different Preview scene in Studio Mode.");
     if (state.return_ready && state.auto_cut === "off" && target) {
         find("cut-target").textContent += " · Ready to cut";
@@ -671,7 +819,7 @@ function render(state) {
     find("next").disabled = busy || !state.ready || !state.program || !state.queue.some((item, i) => item.media_status === "ready" && (item.id === state.next_cue || (!item.played && i > state.queue.findIndex(row => row.id === state.current))));
     find("pause").textContent = state.status === "Paused" ? "Resume" : "Pause";
     find("pause").disabled = busy || !["Playing", "Paused"].includes(state.status) || !clip;
-    find("stop").disabled = busy || !clip;
+    find("stop").disabled = busy || !(clip || interrupted);
     find("count").textContent = state.queue.length + (state.queue.length === 1 ? " clip" : " clips");
     const key = JSON.stringify([state.queue.map(({duration_ms, ...clip}) => clip), state.current, Boolean(onAir), selected]);
     if (key !== queueKey && !drag) {
@@ -740,8 +888,7 @@ function render(state) {
     }
     drawEstimates();
     renderLists(state);
-    find("message").textContent = error || state.error || (uploading ? "Adding video files…" :
-        !state.ready ? "Set up the scene and its Media Source once." : !state.program ? "Switch Video Rundown to Program when you’re ready to play." : "");
+    find("message").textContent = error || state.error || (!state.ready ? "Set up the scene and its Media Source once." : !state.program ? "Switch Video Rundown to Program when you’re ready to play." : "");
 }
 
 async function refresh() {
@@ -762,23 +909,26 @@ function confirmRestore(name, restore) {
             } else find("backup-result").textContent = error || "Restore failed.";
         });
 }
-find("restore-file").onclick = () => find("restore-input").click();
-find("restore-input").onchange = event => {
-    const file = event.target.files[0];
-    event.target.value = "";
-    if (!file) return;
-    confirmRestore(file.name, async () => {
-        if (busy) return false;
-        busy = true;
-        error = "";
-        try {
-            await post("/restore-upload", file);
-            return true;
-        } catch (e) { error = e.message; return false; }
-        finally { busy = false; await refresh(); }
-    });
+find("restore-file").onclick = async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+        const selection = await folderApi("/pick-restore", {});
+        if (selection.cancelled) return;
+        confirmRestore(selection.name, async () => {
+            if (busy) return false;
+            busy = true;
+            error = "";
+            try {
+                await folderApi("/restore-picked", {id:selection.id});
+                return true;
+            } catch (err) { error = err.message; return false; }
+            finally { busy = false; await refresh(); }
+        });
+    } catch (err) { find("backup-result").textContent = err.message; }
+    finally { button.disabled = false; }
 };
-let missingTarget, missingKey;
+let missingKey;
 function renderMissing(items) {
     const missing = items.filter(item => item.missing);
     const key = JSON.stringify(missing.map(item => [item.id, item.name]));
@@ -792,13 +942,8 @@ function renderMissing(items) {
         const locate = document.createElement("button");
         locate.textContent = "Locate…";
         locate.onclick = async () => {
-            if (!item.linked) {
-                missingTarget = item;
-                find("missing-file").click();
-                return;
-            }
             try {
-                const result = await post("/locate-linked", JSON.stringify({id:item.id}), {"Content-Type":"application/json"});
+                const result = await folderApi("/locate-linked", {id:item.id});
                 if (!result.cancelled) {
                     await refresh();
                     find("backup-result").textContent = "Reconnected “" + item.name + "”.";
@@ -809,48 +954,30 @@ function renderMissing(items) {
         return row;
     }));
 }
-async function relinkFile(item, file) {
-    await post("/relink", file, {"X-Clip-ID":item.id, "X-Clip-Name":encodeURIComponent(file.name)});
-}
-find("find-missing").onclick = () => find("missing-folder").click();
-find("missing-folder").onchange = async event => {
-    const files = [...event.target.files];
-    event.target.value = "";
-    if (!files.length) return;
-    const byName = new Map();
-    for (const file of files) {
-        const name = file.name.toLowerCase();
-        byName.set(name, byName.has(name) ? null : file);
-    }
-    let count = 0, failures = 0;
-    for (const item of [...(last?.library || []), ...(last?.removed || [])].filter(item => item.missing && !item.linked)) {
-        const file = byName.get((item.original_name || item.name).toLowerCase());
-        if (!file) continue;
-        try { await relinkFile(item, file); count++; } catch { failures++; }
-    }
-    await refresh();
-    find("backup-result").textContent = count + " files reconnected." +
-        (failures ? " " + failures + " could not be reconnected." : "") +
-        " Use Locate for remaining files or duplicate names.";
-};
-find("missing-file").onchange = async event => {
-    const file = event.target.files[0], item = missingTarget;
-    event.target.value = "";
-    if (!file || !item) return;
+find("find-missing").onclick = async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
     try {
-        await relinkFile(item, file);
+        const result = await folderApi("/search-missing", {});
+        if (result.cancelled) return;
         await refresh();
-        find("backup-result").textContent = "Reconnected “" + item.name + "”.";
-    } catch (e) { find("backup-result").textContent = e.message; }
+        find("backup-result").textContent = result.count + " files reconnected." +
+            (result.failures ? " " + result.failures + " could not be reconnected." : "") +
+            " Use Locate for any remaining files or duplicate names.";
+    } catch (err) { find("backup-result").textContent = err.message; }
+    finally {
+        button.disabled = ![...(last?.library || []), ...(last?.removed || [])]
+            .some(item => item.missing && !item.linked);
+    }
 };
 let pendingConfirmation;
-function confirmAction(label, detail, action, extra = {}, currentClip) {
+function confirmAction(label, detail, action, extra = {}, currentClip, proceedLabel = label) {
     const dialog = find("confirm-dialog");
     if (busy || dialog.open) return;
     pendingConfirmation = {action, extra, currentClip};
     find("confirm-title").textContent = label;
     find("confirm-detail").textContent = detail;
-    find("confirm-proceed").textContent = label;
+    find("confirm-proceed").textContent = proceedLabel;
     dialog.returnValue = "cancel";
     dialog.showModal();
 }
@@ -876,26 +1003,6 @@ async function run(action, extra = {}) {
     finally { busy = false; await refresh(); }
 }
 
-async function add(files) {
-    if (uploading || !files.length) return;
-    selectPane("library");
-    uploading = true;
-    error = "";
-    if (last) render(last);
-    const failures = [];
-    try {
-        for (const file of files) {
-            try { await post("/upload", file, {"X-Clip-Name":encodeURIComponent(file.name), "X-Clip-Modified":String(file.lastModified)}); }
-            catch (e) { failures.push(file.name + " — " + e.message); }
-            await refresh();
-        }
-    } finally {
-        uploading = false;
-        error = failures.join(" · ");
-        find("files").value = "";
-        await refresh();
-    }
-}
 let libraryClips = new Map();
 let folderRoot = "", folderParts = [], folderListing, folderRootsKey, folderRequest = 0;
 let folderBusy = false, folderRenameTarget;
@@ -973,16 +1080,25 @@ find("file-rename-review").onclick = () => {
 let favoritesKey, fileTarget, destinationPath = "", shownFileOperation;
 const destinationPicker = find("file-destination");
 
-function folderLocation() {
-    const separator = folderRoot.startsWith("/") ? "/" : "\\";
-    if (!folderParts.length) return folderRoot;
-    return folderRoot.replace(/[\\/]$/, "") + separator + folderParts.join(separator);
+function folderLocation(root, parts) {
+    const separator = root.startsWith("/") ? "/" : "\\";
+    return parts.length ? root.replace(/[\\/]$/, "") + separator + parts.join(separator) : root;
 }
 
-function favoriteAtLocation() {
-    const path = folderLocation();
-    return last?.favorites?.find(item => path.startsWith("/")
+function folderFavoriteButton(name, root, parts) {
+    const path = folderLocation(root, parts);
+    const favorite = last?.favorites?.find(item => path.startsWith("/")
         ? item.path === path : item.path.toLowerCase() === path.toLowerCase());
+    const label = favorite ? "Remove from Favorites" : "Add to Favorites";
+    const button = clipAction(favorite ? "★" : "☆", label, () => {
+        if (favorite) confirmUnstar(favorite);
+        else updateFavorite({root, parts, starred:true});
+    });
+    button.classList.add("folder-favorite");
+    button.setAttribute("aria-label", label + " · " + name);
+    button.setAttribute("aria-pressed", String(Boolean(favorite)));
+    button.disabled = folderBusy;
+    return button;
 }
 
 const expandedFavorites = new Set();
@@ -1052,7 +1168,7 @@ function favoriteDetails(node, query, top = false) {
     const summary = document.createElement("summary");
     const title = document.createElement("strong");
     title.textContent = node.name;
-    summary.append(title);
+    summary.append(folderIcon(), title);
     if (top) {
         const path = document.createElement("small");
         path.className = "favorite-path";
@@ -1115,17 +1231,18 @@ find("favorites-search").addEventListener("input", () => {
 
 async function updateFavorite(data) {
     try {
-        await folderApi("/favorite-folder", data);
+        const result = await folderApi("/favorite-folder", data);
+        if (result.parent) {
+            const parent = result.parent;
+            confirmAction("Parent folder already starred",
+                "“" + parent.name + "” is already in Favorites. Add this subfolder as a separate favorite?",
+                () => updateFavorite({...data, confirmed_parent:parent.path}), {}, undefined, "Proceed Anyway");
+            return;
+        }
         await refresh();
         if (pane === "folders") renderFolderListing();
     } catch (err) { showToast(err.message); }
 }
-
-find("folder-star").onclick = () => {
-    const favorite = favoriteAtLocation();
-    if (favorite) confirmUnstar(favorite);
-    else updateFavorite({root:folderRoot, parts:folderParts, starred:true});
-};
 
 function setDestination(path) {
     destinationPath = path;
@@ -1250,14 +1367,10 @@ function renderFolderListing() {
     const root = last?.folders?.find(item => item.path === folderRoot);
     find("folder-register").hidden = !root || root.registered;
     find("folder-register").disabled = folderBusy;
-    find("folder-refresh").hidden = Boolean(root && !root.registered);
+    find("folder-unlink").hidden = !root || folderParts.length > 0;
+    find("folder-unlink").disabled = folderBusy;
+    find("folder-refresh").hidden = !root;
     find("folder-refresh").disabled = folderBusy || !folderRoot;
-    const star = find("folder-star");
-    const favorite = Boolean(favoriteAtLocation());
-    star.hidden = !folderListing;
-    star.disabled = folderBusy;
-    star.setAttribute("aria-pressed", String(favorite));
-    star.textContent = favorite ? "★ Starred" : "☆ Star folder";
     find("folder-rename").hidden = !folderListing || folderListing.saved_only || !folderParts.length;
     find("folder-rename").disabled = folderBusy;
     breadcrumb.replaceChildren();
@@ -1271,26 +1384,40 @@ function renderFolderListing() {
             arrow.textContent = "›";
             breadcrumb.append(arrow, folderButton(name, folderParts.slice(0, index + 1)));
         });
+        if (folderListing) {
+            breadcrumb.append(folderFavoriteButton(folderParts.at(-1) || root?.name || folderRoot, folderRoot, folderParts));
+        }
     }
     for (const name of folderListing?.children || []) {
         const row = document.createElement("li");
-        const button = folderButton(name, [...folderParts, name]);
-        button.className = "folder-child";
+        const parts = [...folderParts, name];
+        const button = folderButton(name, parts);
+        button.classList.add("folder-child");
         const arrow = document.createElement("span");
         arrow.className = "folder-child-arrow";
         arrow.setAttribute("aria-hidden", "true");
         arrow.textContent = "›";
         button.prepend(arrow);
-        row.append(button);
+        row.append(button, folderFavoriteButton(name, folderRoot, parts));
         children.append(row);
     }
     if (last) renderLists(last);
 }
 
+function folderIcon() {
+    const icon = document.createElement("span");
+    icon.className = "folder-icon";
+    icon.setAttribute("aria-hidden", "true");
+    return icon;
+}
+
 function folderButton(name, parts, title = "Open folder") {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = name;
+    button.className = "folder-nav-button";
+    const label = document.createElement("span");
+    label.textContent = name;
+    button.append(folderIcon(), label);
     button.title = title;
     button.disabled = folderBusy;
     button.onclick = () => browseFolder(folderRoot, parts);
@@ -1323,7 +1450,7 @@ async function browseFolder(root, parts, resultMessage = "") {
         folderParts = listing.parts;
         saveLibraryLocation();
         folderMessage(listing.warning || resultMessage || (listing.saved_only
-            ? "Showing previously linked clips. Choose Use this folder to enable refresh and folder renaming."
+            ? "Showing saved clips. Use this folder or Refresh folder scans it for videos."
             : ""));
     } catch (err) {
         if (request !== folderRequest) return;
@@ -1356,14 +1483,37 @@ function setFolderBusy(value) {
 }
 
 find("folder-root").onchange = event => browseFolder(event.target.value, []);
+find("folder-unlink").onclick = () => {
+    const root = folderRoot;
+    if (!root || folderBusy || folderParts.length) return;
+    confirmAction("Unlink folder", "Unlink “" + root
+        + "”? Its clips and favorites will be cleared where no other linked folder covers them. Files stay on the drive.",
+        async () => {
+            setFolderBusy(true);
+            try {
+                const result = await folderApi("/unlink-folder", {root});
+                await refresh();
+                showToast("Folder unlinked. " + result.removed + " library links cleared.");
+            } catch (err) {
+                folderMessage(err.message);
+                showToast(err.message);
+            } finally {
+                setFolderBusy(false);
+            }
+        });
+};
 find("folder-register").onclick = async () => {
     if (folderBusy) return;
     const root = folderRoot, parts = folderParts;
     setFolderBusy(true);
     try {
-        await folderApi("/register-folder", {root});
+        const result = await folderApi("/register-folder", {root});
         await refresh();
-        if (folderRoot === root) await browseFolder(root, parts, "Folder enabled. Use Refresh folder to check for new videos.");
+        if (folderRoot === root) {
+            const count = result.added ?? result.restored ?? 0;
+            const message = "Folder enabled. " + count + (count === 1 ? " clip added." : " clips added.");
+            await browseFolder(root, parts, message);
+        }
     } catch (err) {
         folderMessage(err.message);
     } finally {
@@ -1373,13 +1523,17 @@ find("folder-register").onclick = async () => {
 find("folder-refresh").onclick = async () => {
     if (folderBusy) return;
     const root = folderRoot, parts = folderParts;
+    const registered = last?.folders?.some(folder => folder.path === root && folder.registered);
     setFolderBusy(true);
-    folderMessage("Scanning this folder and its subfolders…");
+    folderMessage(registered ? "Scanning this folder and its subfolders…" : "Linking and scanning the collection…");
     try {
-        const result = await folderApi("/refresh-folder", {root, parts});
+        const result = registered
+            ? await folderApi("/refresh-folder", {root, parts})
+            : await folderApi("/register-folder", {root});
+        const scan = result.total === undefined ? await folderApi("/refresh-folder", {root, parts}) : result;
         await refresh();
         if (folderRoot === root) {
-            await browseFolder(root, parts, result.added + " new clips found. " + result.unsupported + " unsupported.");
+            await browseFolder(root, parts, scan.added + " new clips found. " + scan.unsupported + " unsupported.");
         }
     } catch (err) {
         folderMessage(err.message);
@@ -1430,7 +1584,7 @@ async function linkFolder(name = "") {
     find("link-folder").disabled = true;
     const status = find(pane === "folders" ? "folder-message" : "folder-result");
     status.hidden = false;
-    status.textContent = "Choose the folder in the native window. Verification may take a while for large folders.";
+    status.textContent = "Choose a folder in the file picker. Verification may take a while for large folders.";
     try {
         const result = await folderApi("/link-folder", {name});
         status.textContent = result.cancelled ? "" : result.total
@@ -1455,7 +1609,7 @@ async function linkFile(name = "") {
     button.disabled = true;
     const status = find("folder-result");
     status.hidden = false;
-    status.textContent = "Use the native window to select or drop the original video.";
+    status.textContent = "Select the original video in the file picker.";
     try {
         const result = await folderApi("/link-file", {name});
         status.textContent = result.cancelled ? "" : result.unsupported ? result.unsupported : "Original video linked.";
@@ -1467,8 +1621,6 @@ async function linkFile(name = "") {
     }
 }
 find("link-file").onclick = () => linkFile();
-find("browse").onclick = () => find("files").click();
-find("files").onchange = e => add(e.target.files);
 let toastTimer;
 function showToast(message) {
     const toast = find("action-toast");
@@ -1631,6 +1783,16 @@ for (const key of panes) {
     };
 }
 find("library-search").addEventListener("input", filterLibrary);
+const librarySort = find("library-sort");
+const librarySortKey = "rundown-library-sort";
+try {
+    const savedSort = localStorage.getItem(librarySortKey);
+    if ([...librarySort.options].some(option => option.value === savedSort)) librarySort.value = savedSort;
+} catch {}
+librarySort.onchange = () => {
+    try { localStorage.setItem(librarySortKey, librarySort.value); } catch {}
+    if (last) renderLists(last);
+};
 // Some OBS browser builds deliver two text insertions for one physical keypress.
 let typedKey;
 document.addEventListener("keydown", event => {
@@ -1686,12 +1848,14 @@ find("play").onclick = () => last?.current
     ? confirmAction("Play Selected", "Replace the current on-air clip with the selected clip?", "play", {id:selected}, last.current)
     : run("play", {id:selected});
 find("pause").onclick = () => run(last?.status === "Paused" ? "resume" : "pause");
-find("stop").onclick = () => confirmAction("Stop Playback", "Stop the current on-air clip?", "stop", {}, last?.current);
+find("stop").onclick = () => confirmAction("Stop Playback", last?.current
+    ? "Stop the current on-air clip?" : "Clear the interrupted clip’s playback position?", "stop", {}, last?.current);
 find("next").onclick = () => last?.current
     ? confirmAction("Play Next", "End the current on-air clip and start the next one?", "next", {}, last.current)
     : run("next");
 find("auto").onchange = e => run("auto", {value:e.target.checked});
 find("auto-cut").onchange = e => run("auto_cut", {value:e.target.value});
+find("return-playback").onchange = e => run("return_playback", {value:e.target.value});
 find("cut").onclick = () => confirmAction("Cut to Preview", "Switch the Preview scene to Program now?", "cut", {}, last?.current);
 refresh();
 setInterval(refresh, 500);

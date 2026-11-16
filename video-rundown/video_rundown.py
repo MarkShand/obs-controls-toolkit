@@ -1,10 +1,10 @@
 """Local OBS video rundown. Install obsws-python before launching."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
-from urllib.parse import unquote
 import base64
 import csv
 import errno
+from ipaddress import IPv4Address, IPv4Network
 import shutil
 import io
 from datetime import datetime
@@ -14,12 +14,13 @@ import hmac
 import json
 import os
 import secrets
+import socket
 import sqlite3
 import subprocess
 import sys
-from stat import IO_REPARSE_TAG_MOUNT_POINT, S_ISREG
+import stat
 from contextlib import closing, suppress
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 import math
 import threading
 import time
@@ -42,6 +43,8 @@ OTHER_VIDEO_FORMATS = {".3gp", ".asf", ".divx", ".dv", ".f4v", ".m2t", ".m2ts", 
                        ".mpeg", ".mpg", ".mts", ".mxf", ".ogv", ".rm", ".rmvb", ".vob", ".wmv"}
 METADATA_VERSION = 3
 FOLDER_PICKER = threading.Lock()
+PICKED_BACKUP = {}
+BACKUP_EXTENSIONS = {".json", ".sqlite", ".sqlite3", ".db"}
 FOLDER_OPERATION = threading.Lock()
 TOKEN = secrets.token_hex(32)
 LOCK = threading.RLock()
@@ -57,6 +60,15 @@ FOLDERS_FILE = CACHE / "folders.json"
 FOLDER_RENAME_FILE = CACHE / "folder-rename.json"
 FILE_CHANGE_FILE = CACHE / "file-change.json"
 FAVORITES_FILE = CACHE / "favorites.json"
+LAN_MONITOR_FILE = CACHE / "lan-monitor.json"
+LAN_MONITOR_PORT = 46644
+LAN_NETWORKS = tuple(map(IPv4Network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")))
+LAN_CODE_CHARACTERS = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+LAN_LOCK = threading.Lock()
+lan_monitor = None
+lan_monitor_error = ""
+cue_clock = {}
+preview_frame = None
 CATEGORIES = []
 FOLDERS = []
 FAVORITES = []
@@ -65,11 +77,13 @@ folder_generation = 0
 RENAME_SUGGESTIONS = {}
 WATCHED_FOLDERS = {}
 FAVORITE_TREES = {}
-state = dict(ready=False, program=False, current=None, auto=False, auto_cut="off", preview=None, return_ready=False, status="Idle", cursor=0, duration=0, error="")
+state = dict(ready=False, program=False, current=None, auto=False, auto_cut="off", return_playback="restart",
+             preview=None, return_ready=False, status="Idle", cursor=0, duration=0, error="", air_revision=0)
 client = None
 armed = False
 started = 0.0
 sampled_at = 0.0
+held_path = None
 
 
 def save_json(path, data):
@@ -122,6 +136,7 @@ def find_clip(clip_id):
 
 def cue(clip_id):
     state.update(cue=clip_id, cue_revision=state.get("cue_revision", 0) + 1)
+    cue_clock.clear()
 
 
 def clip_title(clip):
@@ -132,9 +147,10 @@ def clip_title(clip):
 def restore_preferences_and_history():
     if SETTINGS_FILE.exists():
         settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        state["auto"] = settings.get("auto") is True
         if settings.get("auto_cut") in {"off", "clip", "rundown"}:
             state["auto_cut"] = settings["auto_cut"]
+        if settings.get("return_playback") == "continue":
+            state["return_playback"] = "continue"
     if HISTORY_FILE.exists():
         saved = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
         HISTORY.extend(saved if isinstance(saved, list) else saved["entries"])
@@ -157,8 +173,8 @@ def media_item(clip):
 
 def file_stamp(path):
     try:
-        stat = path.stat()
-        return [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino] if S_ISREG(stat.st_mode) else None
+        info = path.stat()
+        return [info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino] if stat.S_ISREG(info.st_mode) else None
     except OSError:
         return None
 
@@ -296,6 +312,18 @@ def rename_signature(path, stamp):
     return path.suffix.lower(), stamp[0], stamp[1]
 
 
+def same_file_identity(old_path, old_stamp, new_path, new_stamp):
+    if not old_stamp[3] or old_stamp[3] != new_stamp[3]:
+        return False
+    if os.name == "nt":
+        return old_path.drive == new_path.drive and old_stamp[2] == new_stamp[2]
+    # POSIX inode numbers are unique only within a file system.
+    try:
+        return old_path.parent.stat().st_dev == new_path.stat().st_dev
+    except OSError:
+        return False
+
+
 def find_external_renames(missing, observed=(), known=(), roots=()):
     missing = [item for item in missing if definitely_missing(Path(item["path"]))]
     wanted = {rename_signature(Path(item["path"]), rename_stamp(item)) for item in missing}
@@ -329,8 +357,7 @@ def find_external_renames(missing, observed=(), known=(), roots=()):
         options = [(path, stamp) for path, stamp in candidates[rename_signature(old_path, old_stamp)]
                    if path.parent == old_path.parent or any(path.is_relative_to(root) for root in shared_roots)]
         exact = [(path, stamp) for path, stamp in options
-                 if old_stamp[3] and stamp[3] == old_stamp[3] and path.drive == old_path.drive
-                 and (os.name != "nt" or stamp[2] == old_stamp[2])]
+                 if same_file_identity(old_path, old_stamp, path, stamp)]
         # Size and timestamps alone may identify another copy.
         possible = exact or [(path, stamp) for path, stamp in options if stamp[2] == old_stamp[2]]
         if len(possible) == 1:
@@ -444,48 +471,61 @@ def local_path(raw_path):
     return Path(raw_path)
 
 
-def choose_link_path(label, *, folder=True, drop_file=False, folder_only=False, initial_folder=None):
+def pick_paths(title, kind, *, multiple=False, initial_folder=None, extensions=None):
     if not FOLDER_PICKER.acquire(blocking=False):
         raise ValueError("A file or folder window is already open.")
     try:
+        formats = sorted(extensions if extensions is not None else
+                         BACKUP_EXTENSIONS if kind == "backup" else FORMATS | OTHER_VIDEO_FORMATS)
         if os.name == "nt":
             command = ["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
-                       "-File", str(ROOT / "choose_media.ps1"), "-Label", label or "Link video folder"]
-            if drop_file:
-                command.append("-DropFile")
-            elif not folder:
-                command.append("-FileOnly")
-            elif folder_only:
-                command.append("-FolderOnly")
-                if initial_folder:
-                    command.extend(["-InitialFolder", str(initial_folder)])
+                       "-File", str(ROOT / "choose_media.ps1"), "-Label", title, "-Kind", kind]
+            if multiple:
+                command.append("-Multiple")
+            if initial_folder:
+                command.extend(["-InitialFolder", str(initial_folder)])
+            if kind != "folder":
+                command.extend(["-Pattern", ";".join("*" + extension for extension in formats)])
             flags = subprocess.CREATE_NO_WINDOW
         elif sys.platform == "darwin":
-            prompt = ("Choose a destination folder" if folder_only else
-                      "Choose the video folder to link" if folder else "Choose the video file")
-            if folder_only and initial_folder:
-                command = ["osascript", "-e", f"""on run arguments
-return POSIX path of (choose folder with prompt "{prompt}" default location ((POSIX file (item 1 of arguments)) as alias))
-end run""", str(initial_folder)]
-            else:
-                command = ["osascript", "-e", f'POSIX path of (choose {"folder" if folder else "file"} with prompt "{prompt}")']
+            script = """function run(args) {
+    var app = Application.currentApplication();
+    app.includeStandardAdditions = true;
+    var multiple = args[2] === "true";
+    var options = {withPrompt: args[0], multipleSelectionsAllowed: multiple};
+    if (args[3]) options.defaultLocation = Path(args[3]);
+    if (args[1] !== "folder") options.ofType = JSON.parse(args[4]);
+    var selected = args[1] === "folder" ? app.chooseFolder(options) : app.chooseFile(options);
+    return JSON.stringify((multiple ? selected : [selected]).map(function(item) { return String(item); }));
+}"""
+            command = ["osascript", "-l", "JavaScript", "-e", script, title, kind, str(multiple).lower(),
+                       str(initial_folder) if initial_folder else "", json.dumps([ext[1:] for ext in formats])]
             flags = 0
         else:
             raise ValueError("The native media picker is available on Windows and macOS.")
         result = subprocess.run(command, capture_output=True, encoding="utf-8",
                                 errors="replace", creationflags=flags, timeout=300)
-        if result.returncode and not (sys.platform == "darwin" and "(-128)" in result.stderr):
+        if result.returncode:
+            if sys.platform == "darwin" and "(-128)" in result.stderr:
+                return []
             raise ValueError("The native media picker could not open.")
-        return result.stdout.rstrip("\r\n") if result.returncode == 0 else ""
+        paths = json.loads(result.stdout)
+        if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+            raise ValueError("The native media picker returned an invalid selection.")
+        return paths
     except subprocess.TimeoutExpired as exc:
         raise ValueError("The media picker timed out. Open it again to retry.") from exc
     finally:
         FOLDER_PICKER.release()
 
 
+def pick_path(title, kind, **options):
+    return next(iter(pick_paths(title, kind, **options)), "")
+
+
 def is_directory_link(path):
     return path.is_symlink() or (
-        os.name == "nt" and getattr(path.lstat(), "st_reparse_tag", None) == IO_REPARSE_TAG_MOUNT_POINT
+        os.name == "nt" and getattr(path.lstat(), "st_reparse_tag", None) == stat.IO_REPARSE_TAG_MOUNT_POINT
     )
 
 
@@ -542,6 +582,95 @@ def explorer_roots():
     return roots
 
 
+def reconnect_picked_video(item, source):
+    stamp = file_stamp(source)
+    if stamp is None or source.is_relative_to(CACHE) or source.suffix.lower() not in FORMATS:
+        raise ValueError("Choose an available video outside the rundown cache.")
+    replacement = dict(item, path=str(source), name=source.name, linked=True)
+    replacement.pop("cache_name", None)
+    replacement.pop("source_modified_at", None)
+    record = verify_video(replacement, stamp)
+    if record["unsupported"]:
+        raise ValueError(record["unsupported"])
+    with LOCK:
+        if LIBRARY.get(item["id"]) is not item or media_status(item) != "missing" or file_stamp(source) != stamp:
+            raise ValueError("The clip or selected video changed. Try again.")
+        save_json(LIBRARY_FILE, {**LIBRARY, item["id"]: record})
+        LIBRARY[item["id"]] = record
+
+
+def search_missing_folder(value):
+    root = local_path(value).resolve()
+    with LOCK:
+        missing = [item for item in LIBRARY.values() if not item.get("linked") and media_status(item) == "missing"]
+    names = {item["name"].casefold() for item in missing}
+    matches = {}
+    if names:
+        for current, dirs, files in os.walk(root):
+            parent = Path(current)
+            dirs[:] = [name for name in dirs if not is_directory_link(parent / name) and parent / name != CACHE]
+            for name in files:
+                key = name.casefold()
+                if key in names and not (parent / name).is_symlink():
+                    matches[key] = None if key in matches else parent / name
+    count = failures = 0
+    for item in missing:
+        source = matches.get(item["name"].casefold())
+        if source:
+            try:
+                reconnect_picked_video(item, source)
+                count += 1
+            except (OSError, ValueError):
+                failures += 1
+    return {"count": count, "failures": failures}
+
+
+def import_backup_payload(payload):
+    if not 0 < len(payload) <= 64 * 1024**2:
+        raise ValueError("Select a rundown backup up to 64 MB.")
+    legacy = payload.startswith(b"SQLite format 3\x00")
+    extension = ".sqlite" if legacy else ".json"
+    BACKUPS.mkdir(exist_ok=True)
+    temporary = BACKUPS / ("restore-" + uuid.uuid4().hex + ".tmp")
+    try:
+        temporary.write_bytes(payload)
+        with LOCK:
+            restore_backup(temporary, legacy=legacy)
+            temporary.replace(BACKUPS / ("rundown-imported-" + uuid.uuid4().hex[:12] + extension))
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def pick_backup():
+    path = pick_path("Choose a rundown backup", "backup")
+    if not path:
+        return {"cancelled": True}
+    source = local_path(path).resolve()
+    stamp = file_stamp(source)
+    if not stamp or not 0 < stamp[0] <= 64 * 1024**2 or source.suffix.lower() not in BACKUP_EXTENSIONS:
+        raise ValueError("Select a rundown backup up to 64 MB.")
+    selection = uuid.uuid4().hex
+    with LOCK:
+        PICKED_BACKUP.clear()
+        PICKED_BACKUP.update(id=selection, path=source, stamp=stamp)
+    return {"id": selection, "name": source.name}
+
+
+def restore_picked_backup(selection):
+    with LOCK:
+        if not selection or selection != PICKED_BACKUP.get("id"):
+            raise ValueError("Select the backup file again.")
+        source, stamp = PICKED_BACKUP["path"], PICKED_BACKUP["stamp"]
+        PICKED_BACKUP.clear()
+    if file_stamp(source) != stamp:
+        raise ValueError("The selected backup changed. Select it again.")
+    with source.open("rb") as stream:
+        payload = stream.read(64 * 1024**2 + 1)
+    if len(payload) != stamp[0] or file_stamp(source) != stamp:
+        raise ValueError("The selected backup changed. Select it again.")
+    import_backup_payload(payload)
+
+
 def favorite_entries(roots):
     entries = []
     for value in FAVORITES:
@@ -564,6 +693,13 @@ def set_favorite(data):
             else:
                 saved_folder_listing(root, parts)
                 path = Path(root).joinpath(*parts)
+            if any(path == Path(value) for value in FAVORITES):
+                return {}
+            parent = max((Path(value) for value in FAVORITES
+                          if path != Path(value) and path.is_relative_to(value)),
+                         key=lambda folder: len(folder.parts), default=None)
+            if parent is not None and data.get("confirmed_parent") != str(parent):
+                return {"parent": {"path": str(parent), "name": parent.name or str(parent)}}
             updated = saved_roots([*FAVORITES, str(path)])
         else:
             path = local_path(data.get("path"))
@@ -571,6 +707,7 @@ def set_favorite(data):
         if updated != FAVORITES:
             save_json(FAVORITES_FILE, updated)
             FAVORITES[:] = updated
+    return {}
 
 
 def saved_folder_listing(root, parts):
@@ -591,21 +728,97 @@ def saved_folder_listing(root, parts):
     return {"parts": parts, "children": sorted(children, key=str.casefold), "saved_only": True}
 
 
+def restored_clip(item):
+    record = dict(item, removed=False)
+    record.pop("unlinked_folder", None)
+    return record
+
+
+def migrate_unlinked_records(library, folders):
+    roots = [Path(folder) for folder in folders]
+    for clip_id, item in list(library.items()):
+        if not item.get("unlinked_folder"):
+            continue
+        if any(Path(item["path"]).is_relative_to(root) for root in roots):
+            library[clip_id] = restored_clip(item)
+        else:
+            del library[clip_id]
+
+
+def restore_removed_clips(ids):
+    if not isinstance(ids, list) or not ids or any(
+        not isinstance(clip_id, str) or not re.fullmatch(r"[a-f0-9]{32}", clip_id) for clip_id in ids
+    ):
+        raise ValueError("Select removed clips to restore.")
+    with LOCK:
+        updates = {clip_id: restored_clip(LIBRARY[clip_id]) for clip_id in set(ids)
+                   if clip_id in LIBRARY and LIBRARY[clip_id].get("removed")}
+        if FILE_OPERATION.get("status") == "running" and FILE_OPERATION.get("clip") in updates:
+            raise ValueError("Wait for the file operation to finish before restoring these clips.")
+        if updates:
+            save_json(LIBRARY_FILE, {**LIBRARY, **updates})
+            LIBRARY.update(updates)
+    return len(updates)
+
+
 def register_saved_folder(root):
-    with FOLDER_OPERATION, LOCK:
+    with LOCK:
         if not isinstance(root, str) or Path(root) not in explorer_roots():
             raise ValueError("Choose a folder shown in Folder Explorer.")
-        folder = local_path(root)
-        try:
-            if not folder.is_dir() or folder.resolve() != folder:
-                raise ValueError("The folder could not be opened. Check its drive and permissions.")
-        except OSError as exc:
-            raise ValueError("The folder could not be opened. Check its drive and permissions.") from exc
-        roots = saved_roots([*FOLDERS, root])
-        if roots != FOLDERS:
-            save_json(FOLDERS_FILE, roots)
-            FOLDERS[:] = roots
-    return {}
+    return import_folder(root)
+
+
+def unlink_folder(root):
+    global folder_generation
+    if not isinstance(root, str):
+        raise ValueError("Choose a folder to unlink.")
+    folder = local_path(root)
+    with FOLDER_OPERATION, LOCK:
+        if folder not in explorer_roots():
+            raise ValueError("This folder is no longer linked.")
+        remaining = [path for path in FOLDERS if Path(path) != folder]
+        retained_roots = [Path(path) for path in remaining]
+        if not any(folder.is_relative_to(parent) for parent in retained_roots) and any(
+            folder != Path(path) and folder.is_relative_to(path) for path in FAVORITES
+        ):
+            raise ValueError("Unstar the parent folder in Favorites before unlinking this folder.")
+
+        def is_detached(path):
+            return path.is_relative_to(folder) and not any(path.is_relative_to(parent) for parent in retained_roots)
+
+        clips = {clip_id for clip_id, item in LIBRARY.items()
+                 if item.get("linked") and not item.get("removed") and is_detached(Path(item["path"]))}
+        if any(not row.get("marker") and row.get("media_id", row["id"]) in clips for row in QUEUE):
+            raise ValueError("Remove this folder’s clips from the Playlist before unlinking it.")
+        if FILE_OPERATION.get("status") == "running" and FILE_OPERATION.get("clip") in clips:
+            raise ValueError("Wait for the file operation to finish before unlinking this folder.")
+
+        favorites = [path for path in FAVORITES if not is_detached(Path(path))]
+        updated = {clip_id: item for clip_id, item in LIBRARY.items() if clip_id not in clips}
+        changes = [(file, value) for file, value, previous in (
+            (FOLDERS_FILE, remaining, FOLDERS),
+            (FAVORITES_FILE, favorites, FAVORITES),
+            (LIBRARY_FILE, updated, LIBRARY),
+        ) if value != previous]
+        save_settings_files(changes)
+        unstarred = len(FAVORITES) - len(favorites)
+        FOLDERS[:] = remaining
+        FAVORITES[:] = favorites
+        for clip_id in clips:
+            del LIBRARY[clip_id]
+        folder_generation += 1
+        for path in list(WATCHED_FOLDERS):
+            if is_detached(path):
+                del WATCHED_FOLDERS[path]
+        for path in list(FAVORITE_TREES):
+            if path not in FAVORITES:
+                del FAVORITE_TREES[path]
+        for clip_id, (_, target, _) in list(RENAME_SUGGESTIONS.items()):
+            if clip_id in clips or is_detached(target):
+                del RENAME_SUGGESTIONS[clip_id]
+        if state.get("cue") in clips:
+            cue(None)
+        return {"removed": len(clips), "unstarred": unstarred}
 
 
 def registered_folder(root, parts):
@@ -633,6 +846,7 @@ def browse_folder(root, parts):
             if Path(root) not in explorer_roots():
                 raise ValueError("Select a linked folder.")
             return saved_folder_listing(root, parts)
+        generation = folder_generation
     try:
         folder = registered_folder(root, parts)
         names = [child.name for child in folder.iterdir()
@@ -643,7 +857,8 @@ def browse_folder(root, parts):
         listing["warning"] = "The drive folder is unavailable. Showing saved library paths."
         return listing
     with LOCK:
-        WATCHED_FOLDERS[folder] = time.monotonic()
+        if generation == folder_generation and root in FOLDERS:
+            WATCHED_FOLDERS[folder] = time.monotonic()
     return {"parts": folder.relative_to(root).parts, "children": sorted(names, key=str.casefold)}
 
 
@@ -841,6 +1056,8 @@ def scan_linked_folder(root, parts):
                 record = {**(existing or {}), **item}
             if existing:
                 record["id"] = existing["id"]
+                if record.get("unlinked_folder"):
+                    record = restored_clip(record)
             else:
                 new_count += 1
             updated[record["id"]] = record
@@ -1220,6 +1437,10 @@ def link_single_file(value):
             generation = folder_generation
             existing = next((item for item in LIBRARY.values() if item.get("linked") and Path(item["path"]) == path), None)
             if existing:
+                if existing.get("unlinked_folder"):
+                    record = restored_clip(existing)
+                    save_json(LIBRARY_FILE, {**LIBRARY, record["id"]: record})
+                    LIBRARY[record["id"]] = record
                 return {"id": existing["id"], "unsupported": existing.get("unsupported")}
         clip_id = uuid.uuid4().hex
         record = verify_video(dict(id=clip_id, name=path.name, path=str(path), linked=True), stamp)
@@ -1275,7 +1496,7 @@ def create_backup(kind):
                           {"id": item["id"], "media_id": item.get("media_id", item["id"])}
                           for item in QUEUE if not item.get("played")],
                 categories=CATEGORIES, history=HISTORY, folders=FOLDERS, favorites=FAVORITES,
-                settings={key: state.get(key) for key in ("auto", "auto_cut", "next_cue")},
+                settings={key: state.get(key) for key in ("auto", "auto_cut", "return_playback", "next_cue")},
             )
             temporary.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
@@ -1370,6 +1591,8 @@ def read_json_backup(path):
                                     removed=item.get("removed") is True,
                                     categories=[backup_category(value) for value in item.get("categories", [])],
                                     duration_ms=duration_ms if type(duration_ms) is int and duration_ms >= 0 else 0)
+            if linked and item.get("removed") is True and item.get("unlinked_folder") is True:
+                library[clip_id]["unlinked_folder"] = True
             if not linked and item.get("cache_name") is not None:
                 library[clip_id]["cache_name"] = media_path.name
             modified = item.get("source_modified_at")
@@ -1404,6 +1627,7 @@ def read_json_backup(path):
         next_cue = raw_settings.get("next_cue")
         settings = dict(auto=raw_settings.get("auto") is True,
                         auto_cut=mode if mode in {"off", "clip", "rundown"} else "off",
+                        return_playback="continue" if raw_settings.get("return_playback") == "continue" else "restart",
                         next_cue=next_cue if any(row["id"] == next_cue and not row.get("marker") for row in queue) else None)
         return (library, queue, categories, history, settings, saved_roots(snapshot.get("folders", [])),
                 saved_roots(snapshot.get("favorites", [])))
@@ -1419,16 +1643,23 @@ def backup_category(name):
 
 
 def restore_backup(path, *, legacy=False):
-    global folder_generation
-    if not recover_folder_rename():
-        raise ValueError("Reconnect the drive to finish recovering the previous folder rename.")
+    global folder_generation, held_path
     if state["current"] or FILE_OPERATION.get("status") == "running":
         raise ValueError("Stop the rundown and wait for file operations before restoring a backup.")
+    if not recover_folder_rename():
+        raise ValueError("Reconnect the drive to finish recovering the previous folder rename.")
     if not recover_file_change():
         raise ValueError("Reconnect the drive to recover the last file operation before restoring.")
     library, queue, categories, history, settings, folders, favorites = (
         (*read_legacy_backup(path), [], []) if legacy else read_json_backup(path)
     )
+    if state.get("interrupted"):
+        if rundown_ready(obs()):
+            release_rundown_media(obs())
+        held_path = None
+        state["interrupted"] = None
+    settings.setdefault("return_playback", "restart")
+    migrate_unlinked_records(library, folders)
     if LIBRARY or QUEUE or HISTORY or CATEGORIES or FOLDERS or FAVORITES:
         create_backup("json")
     updates = [(LIBRARY_FILE, library), (QUEUE_FILE, queue), (HISTORY_FILE, history),
@@ -1543,29 +1774,65 @@ def setup(adopt_existing=False):
     state["ready"] = True
 
 
+def release_rundown_media(c):
+    c.trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+    c.set_input_settings(SOURCE, {"local_file": ""}, True)
+
+
+def take_rundown_off_air(c, media):
+    global armed, held_path
+    clip = find_clip(state["current"])
+    can_continue = clip and media.media_state in {"OBS_MEDIA_STATE_PLAYING", "OBS_MEDIA_STATE_PAUSED"}
+    if can_continue:
+        if media.media_state == "OBS_MEDIA_STATE_PLAYING":
+            c.trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE")
+            media = c.get_media_input_status(SOURCE)
+        held_path = media_item(clip)["path"]
+    else:
+        release_rundown_media(c)
+        held_path = None
+    log_playback("Taken off air")
+    armed = False
+    state.update(current=None, status="Stopped", cursor=0, duration=0, schedule_anchor=None,
+                 next_cue=clip["id"] if clip else None,
+                 interrupted=dict(id=clip["id"], cursor=media.media_cursor or 0) if can_continue else None)
+
+
 def play(clip):
     item = require_playable(clip)
-    global armed, started
+    global armed, started, sampled_at, held_path
     c = obs()
     if c.get_current_program_scene().current_program_scene_name != SCENE:
         raise ValueError("Put Video Rundown on Program before playing a clip.")
     if not rundown_ready(c):
         state["ready"] = False
         raise ValueError("Set up the Video Rundown scene and its media source first.")
+    interrupted = state.get("interrupted") or {}
+    continuing = state["return_playback"] == "continue" and interrupted.get("id") == clip["id"]
+    cursor, duration = 0, 0
+    if continuing:
+        media = c.get_media_input_status(SOURCE)
+        if (held_path != item["path"] or media.media_state != "OBS_MEDIA_STATE_PAUSED"
+                or abs((media.media_cursor or 0) - interrupted["cursor"]) > 1500):
+            raise ValueError("The paused video is no longer available. Choose Restart clip to play it again.")
+        cursor, duration = media.media_cursor or 0, media.media_duration or 0
+        c.trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
+    else:
+        c.set_input_settings(SOURCE, {
+            "is_local_file": True, "local_file": item["path"], "looping": False,
+            "restart_on_activate": False, "close_when_inactive": False,
+            "clear_on_media_end": True,
+        }, True)
+        c.trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
     log_playback("Replaced")
     armed = False
-    state.update(return_ready=False, handoff="")
-    c.set_input_settings(SOURCE, {
-        "is_local_file": True, "local_file": item["path"], "looping": False,
-        "restart_on_activate": False, "close_when_inactive": False,
-        "clear_on_media_end": True,
-    }, True)
-    c.trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+    held_path = None
+    started = sampled_at = time.monotonic()
+    state.update(program=True, return_ready=False, handoff="", current=clip["id"], status="Loading",
+                 cursor=cursor, duration=duration, air_started=None, schedule_anchor=None,
+                 next_cue=None, interrupted=None, air_revision=state["air_revision"] + 1)
     clip["played"] = False
     save_queue()
-    state.update(current=clip["id"], status="Loading", cursor=0, duration=0,
-                 air_started=None, schedule_anchor=None, next_cue=None)
-    started = time.monotonic()
 
 
 def current_index():
@@ -1573,8 +1840,8 @@ def current_index():
 
 
 def cut_to_preview():
-    if not state["return_ready"]:
-        raise ValueError("Wait for the rundown clip to finish before cutting.")
+    if not state["return_ready"] and not state["current"]:
+        raise ValueError("There is no rundown playback to cut from.")
     c = obs()
     scenes = c.get_scene_list()
     preview = scenes.current_preview_scene_name
@@ -1598,8 +1865,6 @@ def cut_to_preview():
             c.set_current_scene_transition(cut)
         c.trigger_studio_mode_transition()
         triggered = True
-        state.update(return_ready=False, program=False, current=None, status="Idle",
-                     cursor=0, duration=0, error="", handoff=f"Cut to {preview}.")
     finally:
         try:
             if triggered:
@@ -1609,6 +1874,11 @@ def cut_to_preview():
                     if c.get_current_program_scene().current_program_scene_name == preview:
                         # Let OBS finish its queued transition-stop updates.
                         time.sleep(.2)
+                        state.update(return_ready=False, program=False, error="", handoff=f"Cut to {preview}.")
+                        if state["current"]:
+                            take_rundown_off_air(c, c.get_media_input_status(SOURCE))
+                        else:
+                            state.update(status="Idle", cursor=0, duration=0)
                         break
         finally:
             try:
@@ -1651,6 +1921,10 @@ def finish_clip():
         play(upcoming)
         return
     state["return_ready"] = True
+    try:
+        release_rundown_media(obs())
+    except Exception:
+        state["error"] = "The clip finished, but OBS could not clear Rundown Player."
     if mode == "clip" or (mode == "rundown" and not upcoming):
         try:
             cut_to_preview()
@@ -1671,6 +1945,8 @@ def start_on_program(previous, current):
         try:
             play(clip)
             state["error"] = ""
+        except ValueError as exc:
+            state["error"] = str(exc)
         except Exception:
             state["error"] = "Could not start the rundown on Program. Use Play next to retry."
 
@@ -1692,6 +1968,9 @@ def poll():
                     items = c.get_scene_item_list(SCENE).scene_items
                     source = rundown_input(c, items)
                     ready = source is not None and source.get(RUNDOWN_OWNER) is True
+                    if ready and previous_program is None and not state["current"] and not state.get("interrupted"):
+                        if source.get("local_file"):
+                            release_rundown_media(c)
                     state.update(ready=ready, setup_existing=not ready and source is not None)
                 if not state["program"]:
                     state["return_ready"] = False
@@ -1702,6 +1981,9 @@ def poll():
                     continue
                 previous_status = state["status"]
                 media = c.get_media_input_status(SOURCE)
+                if not state["program"]:
+                    take_rundown_off_air(c, media)
+                    continue
                 sampled_at = time.monotonic()
                 status = media.media_state.removeprefix("OBS_MEDIA_STATE_").title()
                 state.update(status=status, cursor=media.media_cursor or 0, duration=media.media_duration or 0)
@@ -1718,12 +2000,7 @@ def poll():
                         save_json(LIBRARY_FILE, LIBRARY)
                 elif status == "Paused":
                     state["schedule_anchor"] = None
-                if not state["program"]:
-                    log_playback("Taken off air")
-                    armed = False
-                    c.trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
-                    state.update(current=None, status="Stopped", cursor=0, duration=0)
-                elif status == "Ended" and previous_status != "Ended" and (armed or state["duration"] > 0):
+                if status == "Ended" and previous_status != "Ended" and (armed or state["duration"] > 0):
                     armed = False
                     finish_clip()
                 elif status == "Error" or (status in {"Opening", "None", "Stopped"} and time.monotonic() - started > 8):
@@ -1748,7 +2025,7 @@ def category_name(name):
 
 
 def action(data):
-    global armed
+    global armed, held_path, sampled_at
     cmd = data.get("action")
     if cmd == "restore_backup":
         name = data.get("name", "")
@@ -1782,7 +2059,10 @@ def action(data):
         QUEUE.insert(position, clip)
         save_queue()
         return
-    if cmd in {"remove_media", "restore_media", "trash_media"}:
+    if cmd == "restore_media":
+        restore_removed_clips([data.get("id")])
+        return
+    if cmd in {"remove_media", "forget_media", "trash_media"}:
         if FILE_OPERATION.get("status") == "running" and FILE_OPERATION.get("clip") == data.get("id"):
             raise ValueError("Wait for the file operation to finish.")
         item = LIBRARY.get(data.get("id"))
@@ -1790,38 +2070,28 @@ def action(data):
             raise ValueError("This clip has already been moved or removed.")
         if any(row.get("media_id", row["id"]) == item["id"] for row in QUEUE if not row.get("marker")):
             raise ValueError("Remove this clip from the Playlist before removing it from the library.")
-        if cmd == "trash_media" and item.get("linked"):
+        if cmd in {"forget_media", "trash_media"}:
             updated = LIBRARY.copy()
             del updated[item["id"]]
             save_json(LIBRARY_FILE, updated)
             del LIBRARY[item["id"]]
-        elif cmd == "trash_media":
-            try:
-                from send2trash import send2trash
-                send2trash(item["path"])
-            except (ImportError, OSError) as exc:
-                raise ValueError("Could not move this clip to the system Trash or Recycle Bin.") from exc
-            del LIBRARY[item["id"]]
-            save_json(LIBRARY_FILE, LIBRARY)
         else:
-            previous = item.get("removed", False)
-            item["removed"] = cmd == "remove_media"
-            try:
-                save_json(LIBRARY_FILE, LIBRARY)
-            except OSError:
-                item["removed"] = previous
-                raise
+            record = dict(item, removed=True)
+            save_json(LIBRARY_FILE, {**LIBRARY, record["id"]: record})
+            LIBRARY[record["id"]] = record
         if cmd == "remove_media" and state.get("cue") == item["id"]:
             cue(None)
         return
     if cmd == "setup":
         setup(adopt_existing=data.get("adopt_existing") is True)
         return
-    if cmd in {"auto", "auto_cut"}:
+    if cmd in {"auto", "auto_cut", "return_playback"}:
         value = bool(data.get("value")) if cmd == "auto" else data.get("value")
         if cmd == "auto_cut" and value not in {"off", "clip", "rundown"}:
             raise ValueError("Choose an auto-cut mode.")
-        settings = {key: state[key] for key in ("auto", "auto_cut")}
+        if cmd == "return_playback" and value not in {"restart", "continue"}:
+            raise ValueError("Choose how the interrupted clip should play.")
+        settings = {key: state[key] for key in ("auto", "auto_cut", "return_playback")}
         settings[cmd] = value
         save_json(SETTINGS_FILE, settings)
         state.update(settings)
@@ -1858,20 +2128,28 @@ def action(data):
             raise ValueError("The current clip cannot be scrubbed.")
         position = max(0, min(position, duration - 1))
         c.set_media_input_cursor(SOURCE, position)
+        sampled_at = time.monotonic()
         state.update(cursor=position, schedule_anchor=time.time() + (duration - position) / 1000)
         return
-    if cmd in {"pause", "resume", "stop"}:
-        if not state["current"]:
-            return
-        obs().trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_" + {
-            "pause": "PAUSE", "resume": "PLAY", "stop": "STOP",
-        }[cmd])
-        if cmd == "stop":
+    if cmd == "stop":
+        if state["current"] or state.get("interrupted"):
+            c = obs()
+            if rundown_ready(c):
+                release_rundown_media(c)
             log_playback("Stopped")
             if current_index() >= 0:
                 state["next_cue"] = state["current"]
             armed = False
-            state.update(current=None, status="Stopped", cursor=0, duration=0, return_ready=False)
+            held_path = None
+            state.update(current=None, interrupted=None, status="Stopped", cursor=0, duration=0,
+                         schedule_anchor=None, return_ready=False)
+        return
+    if cmd in {"pause", "resume"}:
+        if not state["current"]:
+            return
+        obs().trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_" + {
+            "pause": "PAUSE", "resume": "PLAY",
+        }[cmd])
         return
     if cmd == "next":
         clip = next_to_play(current_index())
@@ -1887,6 +2165,8 @@ def action(data):
             raise ValueError("The current clip is locked. Stop it before removing or reordering it.")
         if cmd == "remove":
             clip = QUEUE[index]
+            if (state.get("interrupted") or {}).get("id") == clip["id"]:
+                action({"action": "stop"})
             QUEUE.pop(index)
             save_queue()
             if state.get("next_cue") == clip["id"]:
@@ -1911,26 +2191,112 @@ def action(data):
     raise ValueError("Unknown command.")
 
 
-class Handler(BaseHTTPRequestHandler):
+def current_cue():
+    clip = find_clip(state["cue"]) if state.get("cue") else next(
+        (clip for clip in QUEUE if not clip.get("marker") and media_status(media_item(clip)) == "ready"), None)
+    return clip if clip and not clip.get("marker") else None
+
+
+def update_cue_clock(data):
+    owner, clip_id, revision = data.get("owner"), data.get("id"), data.get("revision")
+    position, playing = data.get("position"), data.get("playing")
+    if (not isinstance(owner, str) or not re.fullmatch(r"[a-f0-9]{32}", owner)
+            or not isinstance(clip_id, str) or type(revision) is not int
+            or type(position) not in (float, int) or not 0 <= position <= 7 * 86400
+            or type(playing) is not bool):
+        raise ValueError("Invalid cue playback sample.")
+    with LOCK:
+        if lan_monitor is None:
+            return
+        clip = current_cue()
+        if not clip or clip["id"] != clip_id or revision != state.get("cue_revision", 0):
+            return
+        now = time.monotonic()
+        if (cue_clock.get("owner") != owner and cue_clock.get("id") == clip_id
+                and now - cue_clock["updated"] < 4):
+            return
+        cue_clock.update(owner=owner, id=clip_id, position=position, playing=playing, updated=now)
+
+
+def on_air_state():
+    clip = find_clip(state["current"]) if state["program"] else None
+    if not clip or state["status"] not in {"Playing", "Paused"}:
+        return None
+    cursor = state["cursor"]
+    if state["status"] == "Playing" and sampled_at:
+        cursor += min(max(0, time.monotonic() - sampled_at), 1) * 1000
+    duration = state["duration"]
+    return dict(id=clip["id"], revision=state["air_revision"], name=clip_title(clip), status=state["status"],
+                cursor=min(cursor, duration) if duration else cursor, duration=duration)
+
+
+def local_preview_state():
+    with LOCK:
+        clip = current_cue()
+        air = on_air_state()
+        air_clip = find_clip(air["id"]) if air else None
+        return dict(cue_clip=public_clip(clip) if clip else None,
+                    cue_metadata=public_library_clip(media_item(clip))["metadata"] if clip else None,
+                    air_metadata=public_library_clip(media_item(air_clip))["metadata"] if air_clip else None,
+                    cue_from_library=state.get("cue") in LIBRARY, cue_revision=state.get("cue_revision", 0),
+                    current=state["current"], lan_monitor_enabled=lan_monitor is not None, on_air=air)
+
+
+def monitor_state():
+    with LOCK:
+        clip = current_cue()
+        cued = public_clip(clip) if clip else None
+        now = time.monotonic()
+        if cued:
+            position, playing = 0, False
+            following = (cued["media_status"] == "ready" and cue_clock.get("id") == clip["id"]
+                         and now - cue_clock["updated"] < 4)
+            if cue_clock.get("id") == clip["id"]:
+                playing = following and cue_clock["playing"]
+                position = cue_clock["position"] + (now - cue_clock["updated"] if playing else 0)
+            cued.update(revision=state.get("cue_revision", 0), position=position,
+                        playing=playing, following=following)
+        return dict(cue=cued, on_air=on_air_state())
+
+
+def open_preview_clip(clip):
+    try:
+        if clip and not clip.get("marker"):
+            return Path(require_playable(clip)["path"]).open("rb")
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def on_air_frame():
+    global preview_frame
+    with LOCK:
+        if not state["program"] or not state["current"] or state["status"] not in {"Playing", "Paused"}:
+            preview_frame = None
+            return None
+        key = (state["air_revision"], state["current"], state["status"])
+        now = time.monotonic()
+        if preview_frame and preview_frame[0] == key and now - preview_frame[1] < 0.4:
+            return preview_frame[2]
+        screenshot = obs().get_source_screenshot(SOURCE, "jpg", 480, 270, 70).image_data
+        payload = base64.b64decode(screenshot.split(",", 1)[1])
+        preview_frame = key, time.monotonic(), payload
+        return payload
+
+
+class PreviewHandler(BaseHTTPRequestHandler):
     def reply(self, status, body, mime="application/json"):
         payload = body.encode()
         self.send_response(status)
         self.send_header("Content-Type", mime + "; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy",
-                         "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; media-src 'self'; img-src 'self'; frame-ancestors 'none'")
+                         "default-src 'none'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self'; img-src 'self'; frame-ancestors 'none'")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
 
-    def serve_clip(self, clip_id):
-        with LOCK:
-            clip = find_clip(clip_id)
-            try:
-                stream = (Path(require_playable(clip)["path"]).open("rb")
-                          if clip and not clip.get("marker") else None)
-            except (OSError, ValueError):
-                stream = None
+    def send_clip(self, stream, *, active=None):
         if stream is None:
             self.reply(404, "{}")
             return
@@ -1939,7 +2305,7 @@ class Handler(BaseHTTPRequestHandler):
             first, last = 0, size - 1
             requested = self.headers.get("Range")
             if requested:
-                match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested)
+                match = re.fullmatch(r"bytes=([0-9]{0,20})-([0-9]{0,20})", requested)
                 if match and match[1]:
                     first = int(match[1])
                     last = min(last, int(match[2])) if match[2] else last
@@ -1947,14 +2313,15 @@ class Handler(BaseHTTPRequestHandler):
                     first = max(0, size - int(match[2]))
                 else:
                     first = size
-                if first > last:
+                if first > last or size == 0:
                     self.send_response(416)
                     self.send_header("Content-Range", f"bytes */{size}")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
             self.send_response(206 if requested else 200)
-            self.send_header("Content-Type", mimetypes.guess_type(clip["path"])[0] or "application/octet-stream")
+            self.send_header("Content-Type", mimetypes.guess_type(stream.name)[0] or "application/octet-stream")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(last - first + 1))
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
@@ -1964,15 +2331,54 @@ class Handler(BaseHTTPRequestHandler):
             stream.seek(first)
             remaining = last - first + 1
             try:
-                while remaining:
+                while remaining and (active is None or active()):
                     block = stream.read(min(remaining, 1024**2))
                     if not block:
                         break
                     self.wfile.write(block)
                     remaining -= len(block)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
                 pass
 
+    def serve_frame(self):
+        try:
+            payload = on_air_frame()
+        except Exception:
+            self.reply(503, "{}")
+            return
+        if payload is None:
+            self.reply(404, "{}")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        with suppress(BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+            self.wfile.write(payload)
+
+    def serve_on_air_media(self, path):
+        match = re.fullmatch(r"/on-air-media/([a-f0-9]{32})/([0-9]{1,20})", path)
+        if not match:
+            self.reply(404, "{}")
+            return
+        clip_id, revision = match[1], int(match[2])
+
+        def still_on_air():
+            return (getattr(self.server, "active", True) and state["program"]
+                    and state["current"] == clip_id and state["air_revision"] == revision
+                    and state["status"] in {"Playing", "Paused"})
+
+        with LOCK:
+            stream = open_preview_clip(find_clip(clip_id)) if still_on_air() else None
+        self.send_clip(stream, active=still_on_air)
+
+    def log_message(self, *_args):
+        pass
+
+
+class Handler(PreviewHandler):
     def do_GET(self):
         if self.headers.get("Host") != HOST:
             self.reply(403, "{}")
@@ -1982,27 +2388,24 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, (ROOT / "clock.html").read_text(encoding="utf-8"), "text/html")
         elif self.path == "/preview":
             self.reply(200, (ROOT / "preview.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN), "text/html")
+        elif self.path == "/preview-state":
+            self.reply(200, json.dumps(local_preview_state()))
+        elif self.path == "/on-air.js":
+            self.reply(200, (ROOT / "on_air.js").read_text(encoding="utf-8"), "text/javascript")
+        elif self.path.startswith("/on-air-media/"):
+            self.serve_on_air_media(self.path)
         elif self.path.startswith("/clip/"):
-            self.serve_clip(self.path.removeprefix("/clip/"))
-        elif self.path == "/frame":
-            try:
-                with LOCK:
-                    if not state["program"] or state["status"] not in {"Playing", "Paused"}:
-                        self.reply(404, "{}")
-                        return
-                    screenshot = obs().get_source_screenshot(SOURCE, "jpg", 480, 270, 70).image_data
-                payload = base64.b64decode(screenshot.split(",", 1)[1])
-                self.send_response(200)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            except Exception:
-                self.reply(503, "{}")
+            with LOCK:
+                clip = find_clip(self.path.removeprefix("/clip/"))
+                stream = open_preview_clip(clip)
+            self.send_clip(stream)
+        elif self.path.split("?", 1)[0] == "/frame":
+            self.serve_frame()
+        elif self.path == "/lan-monitor":
+            if not hmac.compare_digest(self.headers.get("X-Rundown", "").encode(), TOKEN.encode()):
+                self.reply(403, "{}")
+            else:
+                self.reply(200, json.dumps(lan_monitor_settings()))
         elif self.path == "/history.csv":
             with LOCK:
                 payload = history_csv().encode("utf-8-sig")
@@ -2029,6 +2432,7 @@ class Handler(BaseHTTPRequestHandler):
                         library.append(public_library_clip(item, show_path=show_paths, roots=roots))
                 self.reply(200, json.dumps(dict(
                     state, queue=clips, library=library, removed=removed,
+                    lan_monitor_enabled=lan_monitor is not None,
                     folders=[{"path": str(root), "name": root.name or str(root), "registered": str(root) in FOLDERS}
                              for root in roots],
                     favorites=favorite_entries(roots) if show_paths else [],
@@ -2052,28 +2456,39 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(30)
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if self.path == "/restore-upload":
+            if self.path in {"/lan-monitor", "/cue-clock"} and 0 < length <= 2048:
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid request.")
+                if self.path == "/lan-monitor":
+                    self.reply(200, json.dumps(configure_lan_monitor(data)))
+                else:
+                    update_cue_clock(data)
+                    self.reply(200, "{}")
+                return
+            elif self.path == "/restore-upload":
                 if not 0 < length <= 64 * 1024**2:
                     raise ValueError("Select a rundown backup up to 64 MB.")
                 payload = self.rfile.read(length)
                 if len(payload) != length:
                     raise ValueError("Select a complete rundown backup.")
-                legacy = payload.startswith(b"SQLite format 3\x00")
-                extension = ".sqlite" if legacy else ".json"
-                BACKUPS.mkdir(exist_ok=True)
-                temporary = BACKUPS / ("restore-" + uuid.uuid4().hex + ".tmp")
-                try:
-                    temporary.write_bytes(payload)
-                    with LOCK:
-                        restore_backup(temporary, legacy=legacy)
-                        temporary.replace(BACKUPS / ("rundown-imported-" + uuid.uuid4().hex[:12] + extension))
-                finally:
-                    temporary.unlink(missing_ok=True)
+                import_backup_payload(payload)
+            elif self.path in {"/pick-restore", "/restore-picked", "/search-missing"} and 0 < length <= 8192:
+                data = json.loads(self.rfile.read(length))
+                if self.path == "/pick-restore":
+                    result = pick_backup()
+                elif self.path == "/restore-picked":
+                    restore_picked_backup(data.get("id"))
+                    result = {}
+                else:
+                    path = pick_path("Choose a folder to search for missing videos", "folder")
+                    result = search_missing_folder(path) if path else {"cancelled": True}
+                self.reply(200, json.dumps(result))
+                return
             elif self.path in {"/favorite-folder", "/file-operation", "/pick-file-destination", "/link-file"} and 0 < length <= 8192:
                 data = json.loads(self.rfile.read(length))
                 if self.path == "/favorite-folder":
-                    set_favorite(data)
-                    result = {}
+                    result = set_favorite(data)
                 elif self.path == "/file-operation":
                     result = start_file_operation(data)
                 elif self.path == "/pick-file-destination":
@@ -2083,28 +2498,35 @@ class Handler(BaseHTTPRequestHandler):
                         if not item:
                             raise ValueError("Select a clip before choosing a destination.")
                         parent = Path(item["path"]).parent
-                    result = {"path": choose_link_path(
-                        "Choose a destination folder", folder_only=True,
+                    result = {"path": pick_path(
+                        "Choose a destination folder", "folder",
                         initial_folder=parent if parent.is_dir() else None,
                     )}
                 else:
                     name = data.get("name", "")
                     name = "".join(char for char in name[:160] if char.isprintable()) if isinstance(name, str) else ""
                     label = "Link video" + (" - " + name if name else "")
-                    path = choose_link_path(label, folder=False, drop_file=True)
+                    path = pick_path(label, "video")
                     result = link_single_file(path) if path else {"cancelled": True}
                 self.reply(200, json.dumps(result))
+                return
+            elif self.path == "/restore-removed" and 0 < length <= 4 * 1024**2:
+                data = json.loads(self.rfile.read(length))
+                count = restore_removed_clips(data.get("ids"))
+                self.reply(200, json.dumps({"restored": count}))
                 return
             elif self.path == "/confirm-file-rename" and 0 < length <= 8192:
                 data = json.loads(self.rfile.read(length))
                 confirm_external_rename(data.get("id"), data.get("path"))
-            elif self.path in {"/browse-folder", "/register-folder", "/refresh-folder", "/rename-folder"} and 0 < length <= 8192:
+            elif self.path in {"/browse-folder", "/register-folder", "/unlink-folder", "/refresh-folder", "/rename-folder"} and 0 < length <= 8192:
                 data = json.loads(self.rfile.read(length))
                 root, parts = data.get("root"), data.get("parts")
                 if self.path == "/browse-folder":
                     result = browse_folder(root, parts)
                 elif self.path == "/register-folder":
                     result = register_saved_folder(root)
+                elif self.path == "/unlink-folder":
+                    result = unlink_folder(root)
                 elif self.path == "/refresh-folder":
                     if not isinstance(parts, list):
                         raise ValueError("Select a linked folder.")
@@ -2119,88 +2541,25 @@ class Handler(BaseHTTPRequestHandler):
                     name = data.get("name", "")
                     name = "".join(char for char in name[:180] if char.isprintable()) if isinstance(name, str) else ""
                     label = f"Link folder: {name}" if name else ""
-                    path = choose_link_path(label)
+                    path = pick_path(label or "Link video folder", "folder")
                     result = import_folder(path) if path else {"cancelled": True}
                 else:
                     clip_id = data.get("id")
                     with LOCK:
-                        item = LIBRARY.get(clip_id)
-                        if not item or not item.get("linked") or media_status(item) != "missing":
-                            raise ValueError("Select a missing linked clip.")
-                    chosen = choose_link_path("Reconnect linked video", folder=False)
+                        item = LIBRARY.get(clip_id) if isinstance(clip_id, str) else None
+                        if not item or media_status(item) != "missing":
+                            raise ValueError("Select a missing clip.")
+                        parent = Path(item["path"]).parent
+                    extensions = FORMATS if item.get("linked") else {Path(item["path"]).suffix.lower()}
+                    chosen = pick_path("Reconnect missing video", "video", extensions=extensions,
+                                       initial_folder=parent if parent.is_dir() else None)
                     if not chosen:
                         self.reply(200, json.dumps({"cancelled": True}))
                         return
-                    path = local_path(chosen).resolve()
-                    stamp = file_stamp(path)
-                    if stamp is None or path.is_relative_to(CACHE):
-                        raise ValueError("Choose an available video outside the rundown cache.")
-                    record = verify_video(dict(item, path=str(path), name=path.name), stamp)
-                    if record["unsupported"]:
-                        raise ValueError(record["unsupported"])
-                    with LOCK:
-                        if LIBRARY.get(clip_id) is not item or media_status(item) != "missing":
-                            raise ValueError("The selected clip changed. Try again.")
-                        updated = {**LIBRARY, clip_id: record}
-                        save_json(LIBRARY_FILE, updated)
-                        LIBRARY[clip_id] = record
+                    reconnect_picked_video(item, local_path(chosen).resolve())
                     result = {}
                 self.reply(200, json.dumps(result))
                 return
-            elif self.path == "/relink":
-                clip_id = self.headers.get("X-Clip-ID", "")
-                name = unquote(self.headers.get("X-Clip-Name", ""))
-                with LOCK:
-                    item = LIBRARY.get(clip_id)
-                    if not item or item.get("linked") or Path(item["path"]).exists():
-                        raise ValueError("The selected clip is no longer missing.")
-                    path = Path(item["path"])
-                if Path(name).suffix.lower() != path.suffix.lower() or not 0 < length <= 4 * 1024**3:
-                    raise ValueError("Choose a video with the original file format, up to 4 GB.")
-                temporary = CACHE / (uuid.uuid4().hex + ".tmp")
-                try:
-                    with temporary.open("xb") as stream:
-                        remaining = length
-                        while remaining:
-                            block = self.rfile.read(min(remaining, 1024**2))
-                            if not block:
-                                raise ValueError("The file transfer was interrupted.")
-                            stream.write(block)
-                            remaining -= len(block)
-                    with LOCK:
-                        if LIBRARY.get(clip_id) is not item or path.exists():
-                            raise ValueError("The selected clip changed during the transfer.")
-                        temporary.replace(path)
-                finally:
-                    temporary.unlink(missing_ok=True)
-            elif self.path == "/upload":
-                name = unquote(self.headers.get("X-Clip-Name", ""))
-                extension = Path(name).suffix.lower()
-                if extension not in FORMATS:
-                    raise ValueError("This file type is not listed for OBS Media Source.")
-                if not 0 < length <= 4 * 1024**3:
-                    raise ValueError("Clips must be between 1 byte and 4 GB.")
-                clip_id = uuid.uuid4().hex
-                path = CACHE / (clip_id + extension)
-                try:
-                    with path.open("xb") as stream:
-                        remaining = length
-                        while remaining:
-                            block = self.rfile.read(min(remaining, 1024**2))
-                            if not block:
-                                raise ValueError("The file transfer was interrupted.")
-                            stream.write(block)
-                            remaining -= len(block)
-                except Exception:
-                    path.unlink(missing_ok=True)
-                    raise
-                with LOCK:
-                    item = dict(id=clip_id, name=name, path=str(path))
-                    modified = self.headers.get("X-Clip-Modified", "")
-                    if modified.isascii() and modified.isdecimal() and len(modified) <= 15:
-                        item["source_modified_at"] = int(modified) / 1000
-                    LIBRARY[clip_id] = item
-                    save_json(LIBRARY_FILE, LIBRARY)
             elif self.path in {"/export-csv", "/backup-json"}:
                 with LOCK:
                     item = create_backup("csv" if self.path == "/export-csv" else "json")
@@ -2218,8 +2577,228 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self.reply(503, json.dumps({"error": "OBS or local storage is unavailable. Check the connection and available disk space."}))
 
-    def log_message(self, *_args):
+
+class LANMonitorHandler(PreviewHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(8)
+
+    def do_GET(self):
+        address, port = self.server.server_address
+        if not self.server.active or self.headers.get("Host") != f"{address}:{port}":
+            self.reply(403, "{}")
+            return
+        supplied = self.headers.get("Authorization", "").encode("latin-1")
+        status, retry = self.server.check_authorization(self.client_address[0], supplied)
+        if status != 200:
+            self.send_response(status)
+            self.send_header("Cache-Control", "no-store")
+            body = b""
+            if status == 401:
+                self.send_header("WWW-Authenticate", 'Basic realm="Rundown LAN Monitor"')
+            else:
+                self.send_header("Retry-After", str(retry))
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                body = f"Too many incorrect access codes. Try again in {retry} seconds.".encode()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        path = self.path.split("?", 1)[0]
+        if path in {"/", "/preview"}:
+            self.reply(200, (ROOT / "lan_monitor.html").read_text(encoding="utf-8"), "text/html")
+        elif path == "/on-air.js":
+            self.reply(200, (ROOT / "on_air.js").read_text(encoding="utf-8"), "text/javascript")
+        elif path == "/state":
+            self.reply(200, json.dumps(monitor_state()))
+        elif path == "/frame":
+            self.serve_frame()
+        elif path.startswith("/on-air-media/"):
+            self.serve_on_air_media(path)
+        elif match := re.fullmatch(r"/cue/([a-f0-9]{32})/([0-9]{1,20})", path):
+            with LOCK:
+                clip = current_cue()
+                revision = state.get("cue_revision", 0)
+                stream = (open_preview_clip(clip) if clip and clip["id"] == match[1]
+                          and revision == int(match[2]) else None)
+            self.send_clip(stream, active=lambda: self.server.active and state.get("cue_revision", 0) == revision)
+        else:
+            self.reply(404, "{}")
+
+
+class LANMonitorServer(ThreadingHTTPServer):
+    allow_reuse_address = sys.platform != "win32"
+    allow_reuse_port = False
+
+    def __init__(self, address, password):
+        self.password = password
+        self.authorization = b"Basic " + base64.b64encode(f"rundown:{password}".encode("ascii"))
+        self.auth_lock = threading.Lock()
+        self.auth_failures = OrderedDict()
+        self.active = True
+        self.connections = threading.BoundedSemaphore(16)
+        super().__init__((address, LAN_MONITOR_PORT), LANMonitorHandler)
+
+    def check_authorization(self, address, supplied):
+        if not supplied:
+            return 401, 0
+        with self.auth_lock:
+            now = time.monotonic()
+            failures, deadline = self.auth_failures.get(address, (0, now + 60))
+            if now >= deadline:
+                failures, deadline = 0, now + 60
+            if failures >= 5:
+                return 429, math.ceil(deadline - now)
+            if hmac.compare_digest(supplied, self.authorization):
+                return 200, 0
+            self.auth_failures[address] = failures + 1, deadline
+            self.auth_failures.move_to_end(address)
+            if len(self.auth_failures) > 256:
+                self.auth_failures.popitem(last=False)
+        return 401, 0
+
+    def process_request(self, request, client_address):
+        if not self.connections.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.connections.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.connections.release()
+
+
+def monitor_address(value):
+    if isinstance(value, str):
+        with suppress(ValueError):
+            address = IPv4Address(value.strip())
+            if any(address in network for network in LAN_NETWORKS):
+                return str(address)
+    raise ValueError("Enter the OBS computer’s private LAN IPv4 address, such as 192.168.1.50.")
+
+
+def detect_monitor_addresses():
+    candidates = []
+    with suppress(OSError):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            # Ask the routing table for its preferred IPv4 interface without sending data.
+            probe.connect(("192.0.2.1", 9))
+            candidates.append(probe.getsockname()[0])
+    if sys.platform == "darwin":
+        with suppress(OSError, subprocess.SubprocessError):
+            interfaces = subprocess.run(["/sbin/ifconfig"], capture_output=True, text=True,
+                                        timeout=2, check=True).stdout
+            candidates.extend(re.findall(r"(?m)^\s+inet ([0-9.]+)\s", interfaces))
+    else:
+        with suppress(OSError):
+            candidates.extend(info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
+    addresses = []
+    for candidate in dict.fromkeys(candidates):
+        with suppress(ValueError, OSError):
+            address = monitor_address(candidate)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as socket_check:
+                socket_check.bind((address, 0))
+            addresses.append(address)
+    return addresses
+
+
+def generate_monitor_code():
+    return "".join(secrets.choice(LAN_CODE_CHARACTERS) for _ in range(4))
+
+
+def bind_lan_monitor(address, password):
+    try:
+        return LANMonitorServer(address, password)
+    except OSError as exc:
+        raise ValueError(f"Could not listen on {address}:{LAN_MONITOR_PORT}. Check the local IPv4 address and whether the port is in use.") from exc
+
+
+def start_lan_monitor(server):
+    global lan_monitor
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.25}, daemon=True).start()
+    lan_monitor = server
+
+
+def stop_lan_monitor():
+    global lan_monitor
+    server = lan_monitor
+    if server is not None:
+        server.active = False
+        lan_monitor = None
+        server.shutdown()
+        server.server_close()
+    with LOCK:
+        cue_clock.clear()
+
+
+def restore_lan_monitor():
+    global lan_monitor_error
+    try:
+        config = json.loads(LAN_MONITOR_FILE.read_bytes())
+        if config is None:
+            return
+        address, password = monitor_address(config["address"]), config["password"]
+        legacy_password = isinstance(password, str) and re.fullmatch(r"[a-zA-Z0-9_-]{24}", password)
+        if legacy_password:
+            password = generate_monitor_code()
+        elif not isinstance(password, str) or len(password) != 4 or any(char not in LAN_CODE_CHARACTERS for char in password):
+            raise ValueError("Invalid LAN monitor access code.")
+        server = bind_lan_monitor(address, password)
+        try:
+            if legacy_password:
+                save_json(LAN_MONITOR_FILE, dict(address=address, password=password))
+            start_lan_monitor(server)
+        except Exception:
+            server.server_close()
+            raise
+    except FileNotFoundError:
         pass
+    except (TypeError, KeyError, ValueError, OSError) as exc:
+        lan_monitor_error = f"LAN monitor could not start. {exc}"
+        print(lan_monitor_error, flush=True)
+
+
+def lan_monitor_settings():
+    with LAN_LOCK:
+        server = lan_monitor
+        error = lan_monitor_error
+        if server is not None:
+            address, port = server.server_address
+            return dict(enabled=True, address=address, url=f"http://{address}:{port}/preview",
+                        username="rundown", password=server.password)
+    return dict(enabled=False, error=error, addresses=detect_monitor_addresses())
+
+
+def configure_lan_monitor(data):
+    global lan_monitor_error
+    with LAN_LOCK:
+        if data.get("enabled") is False:
+            save_json(LAN_MONITOR_FILE, None)
+            stop_lan_monitor()
+        elif data.get("enabled") is True:
+            address = monitor_address(data.get("address"))
+            if lan_monitor is not None:
+                if address != lan_monitor.server_address[0]:
+                    raise ValueError("Disable the LAN monitor before changing its address.")
+            else:
+                password = generate_monitor_code()
+                server = bind_lan_monitor(address, password)
+                try:
+                    save_json(LAN_MONITOR_FILE, dict(address=address, password=password))
+                    start_lan_monitor(server)
+                except Exception:
+                    server.server_close()
+                    raise
+        else:
+            raise ValueError("Choose whether to enable the LAN monitor.")
+        lan_monitor_error = ""
+    return lan_monitor_settings()
 
 
 def main(stop=None):
@@ -2229,12 +2808,17 @@ def main(stop=None):
         threading.Thread(target=scan_library_metadata, daemon=True).start()
         threading.Thread(target=watch_folder_changes, daemon=True).start()
         print("OBS Video Rundown running at " + ORIGIN, flush=True)
-        if stop is None:
-            server.serve_forever()
-        else:
-            server.timeout = 0.25
-            while not stop.is_set():
-                server.handle_request()
+        restore_lan_monitor()
+        try:
+            if stop is None:
+                server.serve_forever()
+            else:
+                server.timeout = 0.25
+                while not stop.is_set():
+                    server.handle_request()
+        finally:
+            with LAN_LOCK:
+                stop_lan_monitor()
 
 
 def load_rundown():
@@ -2251,6 +2835,7 @@ def load_rundown():
         FAVORITES[:] = saved_roots(json.loads(FAVORITES_FILE.read_bytes()))
     recover_folder_rename()
     recover_file_change()
+    migrate_unlinked_records(LIBRARY, FOLDERS)
     if QUEUE_FILE.exists():
         for clip in json.loads(QUEUE_FILE.read_text(encoding="utf-8")):
             if clip.get("marker"):

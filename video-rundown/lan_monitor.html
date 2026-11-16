@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rundown LAN Monitor</title>
+<style>
+:root{color-scheme:dark;background:#14171e;color:#edf2f8;font:14px system-ui,sans-serif}
+body{margin:0 auto;padding:16px;max-width:72rem}header{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+h1{font-size:17px;margin:0 auto 0 0}button,select{font:inherit;padding:6px 10px;border:1px solid #46536a;border-radius:5px;background:#283244;color:inherit;cursor:pointer}
+button[aria-pressed=true]{border-color:#69cfb2;color:#a7f0da}
+video,img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#080a0f;margin-top:10px}
+section{margin-top:10px}p{margin:8px 0;overflow-wrap:anywhere}#time{color:#b9c7d8;font-variant-numeric:tabular-nums}
+progress{display:block;width:100%;height:7px;accent-color:#69cfb2;margin:8px 0}[hidden]{display:none}
+:fullscreen body,.expanded body{box-sizing:border-box;max-width:none;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+:fullscreen #picture,.expanded #picture{flex:1;min-height:0;display:grid;place-items:center;background:#080a0f;margin-top:10px}
+:fullscreen #picture > :not([hidden]),.expanded #picture > :not([hidden]){height:100%;min-height:0;max-height:100%;aspect-ratio:auto;margin:0}
+</style>
+<body>
+<header>
+    <h1>Rundown LAN Monitor</h1>
+    <button id="cue" aria-pressed="true">Cue</button>
+    <button id="on-air" aria-pressed="false">On Air</button>
+    <label hidden>On Air mode <select id="air-mode"><option value="low">Low FPS</option><option value="smooth">Smooth + audio</option></select></label>
+    <button id="fullscreen" aria-pressed="false">Fullscreen</button>
+</header>
+<div id="picture">
+    <video id="video" muted playsinline preload="auto" hidden></video>
+    <video id="air-video" muted playsinline preload="auto" hidden></video>
+    <img id="frame" alt="On Air rundown source" hidden>
+</div>
+<section>
+    <p id="status" role="status">Connecting to Video Rundown…</p>
+    <progress id="progress" aria-label="Playback position" hidden></progress>
+    <p id="time" hidden></p>
+    <button id="audio" hidden>Unmute Cue</button>
+    <button id="start" hidden>Start preview</button>
+    <button id="air-audio" hidden>Unmute On Air</button>
+    <button id="air-play" hidden>Start monitor</button>
+</section>
+<script src="/on-air.js"></script>
+<script>
+const el = id => document.getElementById(id);
+const video = el("video"), progress = el("progress"), time = el("time");
+const status = el("status"), audio = el("audio"), start = el("start");
+const drawOnAir = createOnAirMonitor(draw);
+let view = "cue", snapshot, receivedAt = 0, networkDelay = 0;
+let loadedCue, attemptingPlay = false;
+
+const root = document.documentElement, fullscreen = el("fullscreen");
+function displayFullscreen() {
+    const active = Boolean(document.fullscreenElement) || root.classList.contains("expanded");
+    fullscreen.textContent = active ? "Exit fullscreen" : "Fullscreen";
+    fullscreen.setAttribute("aria-pressed", active);
+}
+fullscreen.onclick = async () => {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else if (root.classList.contains("expanded")) root.classList.remove("expanded");
+    else {
+        try { await root.requestFullscreen(); }
+        catch { root.classList.add("expanded"); }
+    }
+    displayFullscreen();
+};
+document.addEventListener("fullscreenchange", displayFullscreen);
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && root.classList.contains("expanded")) {
+        root.classList.remove("expanded");
+        displayFullscreen();
+    }
+});
+
+function timeLabel(seconds) {
+    const whole = Math.floor(seconds);
+    return Math.floor(whole / 60) + ":" + String(whole % 60).padStart(2, "0");
+}
+
+function timeline(position, duration) {
+    progress.hidden = time.hidden = !duration;
+    if (!duration) return;
+    progress.max = duration;
+    progress.value = Math.min(position, duration);
+    time.textContent = timeLabel(progress.value) + " / " + timeLabel(duration);
+}
+
+async function playPreview() {
+    if (attemptingPlay || !video.paused) return;
+    attemptingPlay = true;
+    try {
+        await video.play();
+        start.hidden = true;
+    } catch (error) {
+        if (error.name === "NotAllowedError" && view === "cue") start.hidden = false;
+    } finally {
+        attemptingPlay = false;
+    }
+}
+
+function drawCue(cue) {
+    video.hidden = audio.hidden = cue?.media_status !== "ready";
+    const source = video.hidden ? null : "/cue/" + cue.id + "/" + cue.revision;
+    if (source !== loadedCue) {
+        loadedCue = source;
+        start.hidden = true;
+        if (source) video.src = source;
+        else { video.removeAttribute("src"); video.load(); }
+    }
+    const position = cue ? cue.position + (cue.playing ? (networkDelay + performance.now() - receivedAt) / 1000 : 0) : 0;
+    const duration = Number.isFinite(video.duration) && !video.hidden ? video.duration : (cue?.duration_ms || 0) / 1000;
+    timeline(position, duration);
+    if (!cue) return "No clip cued.";
+    if (video.hidden) return cue.name + " · Preview unavailable";
+    if (video.error) return cue.name + " · This browser could not play the preview";
+    if (video.readyState >= 1) {
+        const target = Math.min(position, duration || position);
+        if (Math.abs(video.currentTime - target) > (cue.playing && !video.paused ? 0.65 : 0.15)) video.currentTime = target;
+    }
+    if (cue.playing) playPreview();
+    else { video.pause(); start.hidden = true; }
+    return cue.name + (cue.following ? (cue.playing ? " · Playing" : " · Paused") : " · Waiting for the OBS Cue dock");
+}
+
+function drawAir(onAir) {
+    const detail = drawOnAir(onAir, true, receivedAt, networkDelay);
+    timeline((onAir?.cursor || 0) / 1000, (onAir?.duration || 0) / 1000);
+    return onAir ? onAir.name + " · " + onAir.status + " · " + detail : "No rundown clip on Program.";
+}
+
+function draw() {
+    if (view !== "cue" || !snapshot) {
+        video.hidden = audio.hidden = start.hidden = true;
+        video.pause();
+    }
+    if (view !== "on-air" || !snapshot) drawOnAir(null, view === "on-air", receivedAt, networkDelay);
+    let message;
+    if (!snapshot) {
+        timeline(0, 0);
+        message = "Waiting for the OBS computer…";
+    } else {
+        message = view === "cue" ? drawCue(snapshot.cue) : drawAir(snapshot.on_air);
+    }
+    if (status.textContent !== message) status.textContent = message;
+}
+
+video.onloadedmetadata = video.onerror = () => { if (view === "cue" && snapshot) draw(); };
+start.onclick = playPreview;
+audio.onclick = () => {
+    video.muted = !video.muted;
+    audio.textContent = video.muted ? "Unmute Cue" : "Mute Cue";
+};
+for (const mode of ["cue", "on-air"]) {
+    el(mode).onclick = () => {
+        view = mode;
+        el("cue").setAttribute("aria-pressed", view === "cue");
+        el("on-air").setAttribute("aria-pressed", view === "on-air");
+        draw();
+    };
+}
+
+async function refresh() {
+    const began = performance.now(), controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+        const response = await fetch("/state", {cache:"no-store", signal:controller.signal});
+        if (!response.ok) throw new Error();
+        snapshot = await response.json();
+        receivedAt = performance.now();
+        networkDelay = Math.min(250, (receivedAt - began) / 2);
+    } catch {
+        snapshot = null;
+    } finally {
+        clearTimeout(timeout);
+        draw();
+        setTimeout(refresh, 450);
+    }
+}
+refresh();
+</script>
+</body>
+</html>
