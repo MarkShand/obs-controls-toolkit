@@ -1,6 +1,15 @@
+![Demo animation](assets/demo.gif)
 # OBS Control Toolkit
 
 OBS shortcut controls, FoMaKo camera tracking, and a Video Rundown with a media library, Cue and On Air previews, playback history, CSV reports, and JSON backups.
+
+## Windows installer
+
+On Windows x64, open OBS Studio 31 or newer once, quit it, then run `OBS-Control-Toolkit-1.0.1-x64.msi`. Setup stops with a warning if OBS is still running. The MSI bundles Python, installs the toolkit under `%LOCALAPPDATA%\OBS Control Toolkit\App`, and registers scripts and docks for your Windows user. Reopen OBS and choose **Docks → Video Rundown**. If OBS WebSocket was already disabled, enable it with password protection under **Tools → WebSocket Server Settings** to control Program playback.
+
+Use Windows **Settings → Apps → Installed apps** to uninstall while OBS is closed. A fresh MSI installation stores the rundown separately under `%LOCALAPPDATA%\OBS Control Toolkit\Rundown`. When migrating a working folder-based setup, the installer keeps using its existing `video-rundown` data folder, so keep that folder available. Uninstall leaves the library, backups and linked videos available. If installation fails, check `%LOCALAPPDATA%\OBS Control Toolkit\InstallerState\setup.log`.
+
+To build the MSI, activate a Windows x64 Python 3.10+ environment with Tk and install `video-rundown/requirements.txt`. Obtain WiX 6 and the matching WiX UI and Util extensions, then run `python packaging/windows/build_msi.py --wix <wix.exe> --ui-extension <WixToolset.UI.wixext.dll> --util-extension <WixToolset.Util.wixext.dll> --out <output.msi> --work-dir <scratch-folder>`. Increment `--version` for a release that should upgrade an earlier MSI. Use `OBSCONFIG` with `msiexec` when registering a custom OBS profile. The build produces an unsigned MSI.
 
 ## Set up once
 

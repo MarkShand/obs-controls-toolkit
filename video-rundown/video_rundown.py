@@ -29,8 +29,9 @@ import uuid
 import obsws_python
 
 ROOT = Path(__file__).resolve().parent
-CACHE = ROOT / "video-cache"
-BACKUPS = ROOT / "backups"
+DATA = Path(os.environ.get("OBS_TOOLKIT_RUNDOWN_DATA") or ROOT).resolve()
+CACHE = DATA / "video-cache"
+BACKUPS = DATA / "backups"
 HOST = "127.0.0.1:46643"
 ORIGIN = "http://" + HOST
 SCENE = "Video Rundown"
@@ -2822,7 +2823,7 @@ def main(stop=None):
 
 
 def load_rundown():
-    CACHE.mkdir(exist_ok=True)
+    CACHE.mkdir(parents=True, exist_ok=True)
     if LIBRARY_FILE.exists():
         for media_id, item in json.loads(LIBRARY_FILE.read_text(encoding="utf-8")).items():
             path = (local_path(item["path"]) if item.get("linked")

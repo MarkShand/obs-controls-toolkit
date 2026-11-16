@@ -51,6 +51,7 @@ local paused, was_down = false, false
 local toggle_id
 local debounce = 0
 local toolkit_obs_config = ""
+local toolkit_rundown_data = ""
 
 local function runtime(file)
     return script_path() .. "../tracking-runtime/" .. file
@@ -114,8 +115,10 @@ local function start_docks()
     end
     candidate:close()
     local args = libobs.os_process_args_create(python)
+    libobs.os_process_args_add_arg(args, "-B")
     libobs.os_process_args_add_arg(args, runtime("toolkit_host.py"))
     libobs.os_process_args_add_arg(args, toolkit_obs_config)
+    libobs.os_process_args_add_arg(args, toolkit_rundown_data)
     dock_server = libobs.os_process_pipe_create2(args, "w")
     libobs.os_process_args_destroy(args)
     if dock_server == nil then
@@ -234,6 +237,7 @@ end
 
 function script_load(settings)
     toolkit_obs_config = obs.obs_data_get_string(settings, "toolkit_obs_config")
+    toolkit_rundown_data = obs.obs_data_get_string(settings, "toolkit_rundown_data")
     toggle_id = obs.obs_hotkey_register_frontend("obs_pause_shortcuts", "Pause / resume OBS hotkeys", function(pressed)
         if pressed then toggle() end
     end)

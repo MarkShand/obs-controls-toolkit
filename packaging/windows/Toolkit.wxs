@@ -1,0 +1,68 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="OBS Control Toolkit" Manufacturer="OBS Control Toolkit" Version="$(var.Version)"
+           ProductCode="$(var.ProductCode)" UpgradeCode="939D465F-9689-44C5-A4E7-72EF69BD9C39" Scope="perUser">
+    <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Property Id="OBSCONFIG" Secure="yes" />
+    <Property Id="INSTALLFOLDER" Secure="yes" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPCOMMENTS" Value="OBS docks, Video Rundown, and FoMaKo controls." />
+    <util:CloseApplication Id="DetectObs64" Target="obs64.exe" Property="ObsStudioRunning" RebootPrompt="no" />
+    <util:CloseApplication Id="DetectObs32" Target="obs32.exe" Property="ObsStudioRunning" RebootPrompt="no" />
+    <util:CloseApplication Id="DetectObs" Target="obs.exe" Property="ObsStudioRunning" RebootPrompt="no" />
+    <Launch Condition="NOT ObsStudioRunning" Message="OBS Studio is still open. Exit OBS Studio completely, then run OBS Control Toolkit Setup again." />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="TOOLKITROOT" Name="OBS Control Toolkit">
+        <Directory Id="INSTALLFOLDER" Name="App" />
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Toolkit" Title="OBS Control Toolkit">
+      <ComponentGroupRef Id="ToolkitPayload" />
+    </Feature>
+
+    <CustomAction Id="RegisterObsProfile" FileRef="PythonWindowless" Execute="deferred" Impersonate="yes" Return="check"
+                  ExeCommand='-B "[#ProfileInstaller]" install --config "[OBSCONFIG]|" --product "[ProductCode]"' />
+    <CustomAction Id="RollbackRegisterObsProfile" FileRef="PythonWindowless" Execute="rollback" Impersonate="yes" Return="ignore"
+                  ExeCommand='-B "[#ProfileInstaller]" rollback-install --product "[ProductCode]"' />
+    <CustomAction Id="CommitObsProfile" FileRef="PythonWindowless" Execute="commit" Impersonate="yes" Return="ignore"
+                  ExeCommand='-B "[#ProfileInstaller]" commit --product "[ProductCode]"' />
+    <CustomAction Id="UnregisterObsProfile" FileRef="PythonWindowless" Execute="deferred" Impersonate="yes" Return="check"
+                  ExeCommand='-B "[#ProfileInstaller]" uninstall --product "[ProductCode]"' />
+    <CustomAction Id="RollbackUnregisterObsProfile" FileRef="PythonWindowless" Execute="rollback" Impersonate="yes" Return="ignore"
+                  ExeCommand='-B "[#ProfileInstaller]" rollback-uninstall --product "[ProductCode]"' />
+
+    <InstallExecuteSequence>
+      <Custom Action="override Wix4CloseApplications_X64" Before="LaunchConditions" />
+      <Custom Action="RollbackUnregisterObsProfile" Before="UnregisterObsProfile" Condition='REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE' />
+      <Custom Action="UnregisterObsProfile" Before="RemoveFiles" Condition='REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE' />
+      <Custom Action="RollbackRegisterObsProfile" After="InstallFiles" Condition='NOT (REMOVE = "ALL")' />
+      <Custom Action="RegisterObsProfile" After="RollbackRegisterObsProfile" Condition='NOT (REMOVE = "ALL")' />
+      <Custom Action="CommitObsProfile" After="RegisterObsProfile" Condition='NOT (REMOVE = "ALL")' />
+    </InstallExecuteSequence>
+
+    <UI>
+      <UIRef Id="WixUI_Common" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ExitDialog" />
+      <Property Id="DefaultUIFont" Value="ToolkitFont" />
+      <TextStyle Id="ToolkitFont" FaceName="Segoe UI" Size="9" />
+      <TextStyle Id="ToolkitHeading" FaceName="Segoe UI" Size="14" Bold="yes" />
+      <Dialog Id="ToolkitWelcome" Width="360" Height="195" Title="[ProductName] Setup">
+        <Control Id="Heading" Type="Text" X="18" Y="17" Width="325" Height="25" Text="{\ToolkitHeading}Install OBS Control Toolkit" />
+        <Control Id="Intro" Type="Text" X="18" Y="54" Width="325" Height="62"
+                 Text="Exit OBS Studio completely before installing or updating. Setup registers the toolkit's scripts and browser docks in your Windows user profile." />
+        <Control Id="Install" Type="PushButton" X="218" Y="162" Width="58" Height="20" Default="yes" Text="Install">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="286" Y="162" Width="58" Height="20" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+      <InstallUISequence>
+        <Custom Action="Wix4CloseApplications_X64" Before="LaunchConditions" />
+        <Show Dialog="ToolkitWelcome" Before="ProgressDlg" Condition='NOT Installed AND NOT RESUME' />
+      </InstallUISequence>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" />
+    </UI>
+  </Package>
+</Wix>
