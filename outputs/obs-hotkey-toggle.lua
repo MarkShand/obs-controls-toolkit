@@ -13,6 +13,11 @@ short GetAsyncKeyState(int key);
 void *GetForegroundWindow(void);
 unsigned long GetWindowThreadProcessId(void *window, unsigned long *pid);
 unsigned long GetCurrentProcessId(void);
+struct os_process_args *os_process_args_create(const char *executable);
+void os_process_args_add_arg(struct os_process_args *args, const char *arg);
+void os_process_args_destroy(struct os_process_args *args);
+struct os_process_pipe *os_process_pipe_create2(const struct os_process_args *args, const char *type);
+int os_process_pipe_destroy(struct os_process_pipe *pipe);
 ]]
 
 local key, is_active
@@ -45,19 +50,21 @@ end
 local paused, was_down = false, false
 local toggle_id
 local debounce = 0
+local toolkit_obs_config = ""
 
 local function runtime(file)
     return script_path() .. "../tracking-runtime/" .. file
 end
 
 local function quote(path)
-    if windows then return '"' .. path .. '"' end
     return "'" .. path:gsub("'", "'\\''") .. "'"
 end
 
+local windows_toast
 local function toast(status)
     if windows then
-        os.execute('start "" /b pythonw ' .. quote(runtime("hotkey-toast.py")) .. " " .. status)
+        windows_toast = windows_toast or dofile(runtime("windows-toast.lua"))
+        windows_toast(runtime(""), status)
         return
     end
     os.execute(quote(runtime("tracking-toast")) .. " " .. status .. " </dev/null >/dev/null 2>&1 &")
@@ -82,6 +89,25 @@ local function set_paused(value)
 end
 
 local dock_server
+
+local function start_docks()
+    local python = script_path() .. "../.venv/" .. (windows and "Scripts/python.exe" or "bin/python")
+    local candidate = io.open(python, "rb")
+    if not candidate then
+        obs.script_log(obs.LOG_WARNING, "Run OBS Control Toolkit Setup to enable the docks.")
+        return
+    end
+    candidate:close()
+    local args = libobs.os_process_args_create(python)
+    libobs.os_process_args_add_arg(args, runtime("toolkit_host.py"))
+    libobs.os_process_args_add_arg(args, toolkit_obs_config)
+    dock_server = libobs.os_process_pipe_create2(args, "w")
+    libobs.os_process_args_destroy(args)
+    if dock_server == nil then
+        obs.script_log(obs.LOG_ERROR, "Could not start the toolkit docks. Run Setup again.")
+    end
+end
+
 local movement = {0, 1, 2, 12, 13, 14} -- A, S, D, Q, W, E
 local previous, repeats, held = {}, {}, {}
 local tick, next_reminder = 0, 0
@@ -191,12 +217,8 @@ function script_properties()
     return p
 end
 
-local function save_setup()
-    obs.timer_remove(save_setup)
-    obs.obs_frontend_save()
-end
-
-function script_load()
+function script_load(settings)
+    toolkit_obs_config = obs.obs_data_get_string(settings, "toolkit_obs_config")
     toggle_id = obs.obs_hotkey_register_frontend("obs_pause_shortcuts", "Pause / resume OBS hotkeys", function(pressed)
         if pressed then toggle() end
     end)
@@ -222,31 +244,17 @@ function script_load()
     obs.obs_data_array_release(movement_bindings)
     os.remove(runtime("hotkey-dock.toggle"))
     publish_state()
-    local python = windows and "python " or "/usr/bin/env python3 "
-    if not windows then
-        for _, path in ipairs({"/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"}) do
-            local candidate = io.open(path, "rb")
-            if candidate then
-                candidate:close()
-                python = quote(path) .. " "
-                break
-            end
-        end
-    end
-    local redirect = windows and " >NUL 2>&1" or " >/dev/null 2>&1"
-    dock_server = io.popen(python .. quote(runtime("hotkey-dock.py")) .. redirect, "w")
+    start_docks()
     obs.timer_add(check_toggle, 35)
-    obs.timer_add(save_setup, 350)
 end
 
 function script_unload()
     obs.timer_remove(check_toggle)
     if dock_server then
-        dock_server:close()
+        libobs.os_process_pipe_destroy(dock_server)
         dock_server = nil
     end
     os.remove(runtime("hotkey-dock.state"))
-    obs.timer_remove(save_setup)
     if toggle_id then obs.obs_hotkey_unregister(toggle_id) end
     if movement_hint_id then obs.obs_hotkey_unregister(movement_hint_id) end
     if paused then libobs.obs_hotkey_enable_background_press(true) end

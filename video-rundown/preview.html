@@ -72,7 +72,7 @@ function draw() {
     }
     el("cue").setAttribute("aria-pressed", mode === "cue");
     el("live").setAttribute("aria-pressed", mode === "live");
-    const clip = [...state.queue, ...(state.library || [])].find(item => item.id === (mode === "cue" ? (state.cue || state.queue.find(item => !item.marker)?.id) : state.current));
+    let clip = [...state.queue, ...(state.library || [])].find(item => item.id === (mode === "cue" ? (state.cue || state.queue.find(item => item.media_status === "ready")?.id) : state.current));
     const media = state.library?.find(item => item.id === (clip?.media_id || clip?.id));
     const {width, height, fps, format, codec, size_bytes, created_at, modified_at, cached_modified} = media?.metadata || {};
     const details = [
@@ -87,6 +87,7 @@ function draw() {
     const metadata = el("preview-metadata");
     metadata.hidden = !details;
     if (metadata.textContent !== details) metadata.textContent = details;
+    if (mode === "cue" && clip?.media_status !== "ready") clip = undefined;
     video.hidden = mode !== "cue" || !clip;
     if (mode !== "cue") video.pause();
     const freshCue = state.cue_revision !== lastCueRevision;

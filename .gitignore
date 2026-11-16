@@ -1,0 +1,20 @@
+# Local Python environment and bytecode
+/.venv/
+__pycache__/
+*.py[cod]
+
+# Rundown media, state, and backups
+/video-rundown/video-cache/
+/video-rundown/backups/
+toolkit-setup-backups/
+
+# Generated runtime files and the compiled macOS helper
+/tracking-runtime/*.state
+/tracking-runtime/*.state.tmp
+/tracking-runtime/*.toggle
+/tracking-runtime/*.log
+/tracking-runtime/tracking-toast
+
+# Desktop metadata
+.DS_Store
+Thumbs.db

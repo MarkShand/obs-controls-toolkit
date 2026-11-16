@@ -3,9 +3,7 @@ import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import secrets
-import sys
 import platform
-import threading
 
 ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1:46642"
@@ -105,7 +103,21 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-with ThreadingHTTPServer(("127.0.0.1", 46642), Handler) as server:
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+def serve(stop):
+    with ThreadingHTTPServer(("127.0.0.1", 46642), Handler) as server:
+        server.timeout = 0.25
+        print("OBS Controls running at http://" + HOST, flush=True)
+        while not stop.is_set():
+            server.handle_request()
+
+
+if __name__ == "__main__":
+    import sys
+    import threading
+
+    stop = threading.Event()
+    server = threading.Thread(target=serve, args=(stop,), daemon=True)
+    server.start()
     sys.stdin.read()
-    server.shutdown()
+    stop.set()
+    server.join()
