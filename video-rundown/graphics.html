@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="rundown-token" content="__TOKEN__">
+<title>Broadcast Graphics</title>
+<link rel="stylesheet" href="/graphics.css">
+<body class="controller">
+<main>
+    <div id="tab-strip">
+        <button id="tabs-left" class="tab-arrow" type="button" aria-label="Scroll tabs left">‹</button>
+        <nav id="tabs" aria-label="Graphics"></nav>
+        <button id="tabs-right" class="tab-arrow" type="button" aria-label="Scroll tabs right">›</button>
+    </div>
+    <div id="action-toast" role="status" hidden></div>
+    <div id="work">
+        <section class="panel">
+            <div class="row scene-row"><label>OBS scene<select id="scene" disabled></select></label>
+                <button type="button" id="refresh-scenes">Reload scenes</button>
+                <button type="button" id="setup" disabled>Set up source</button></div>
+            <div class="row receiver-header"><strong>Receivers in this scene</strong><label id="layout-label">View<select id="layout"><option value="list">List</option><option value="grid">Pad grid</option></select></label></div>
+            <div id="receivers" class="receiver-list"></div>
+            <details id="inventory"><summary>Toolkit sources by scene</summary><div id="source-groups"></div></details>
+            <div class="row take-row"><button id="show" class="primary" disabled>Show</button><button id="hide" disabled>Hide</button>
+                <button id="auto-start" hidden>Start autoplay</button><button id="auto-stop" hidden>Stop autoplay</button></div>
+            <div id="preview" class="graphic-stage monitor" aria-label="Graphic preview"></div>
+            <label class="check" title="Use the selected off-air OBS receiver to check placement and scale."><input id="scene-preview" type="checkbox" disabled> Preview on OBS Scene</label>
+            <div class="row preview-row"><button id="preview-in">Preview entrance</button><button id="preview-out">Preview exit</button></div>
+        </section>
+        <section class="panel" id="library" aria-label="Saved entries">
+            <div class="row"><input type="search" id="search" placeholder="Search entries…" aria-label="Search saved entries">
+                <select id="sort" aria-label="Sort entries"><option value="number">Number</option><option value="az">Text A–Z</option><option value="za">Text Z–A</option></select>
+                <button id="new">New entry</button></div>
+            <div class="row"><label class="button">Import CSV<input id="library-csv" type="file" accept=".csv,text/csv"></label>
+                <button id="library-export">Export CSV</button><button id="clear-headlines" hidden>Clear all headlines</button></div>
+            <ol id="entries"></ol>
+            <div id="pages" class="row" hidden><button id="previous">Previous</button><small id="page-label"></small><button id="next">Next</button></div>
+            <form id="entry">
+                <label><span id="entry-label">Name</span><textarea id="text" required rows="2" maxlength="200"></textarea></label>
+                <div id="description-fields" hidden>
+                    <label>Description<input id="description" type="text" maxlength="200" placeholder="Host, reporter, or location"></label>
+                    <label class="check"><input type="checkbox" id="show-description" checked> Show description</label>
+                </div>
+                <button type="submit" class="primary">Save entry</button>
+            </form>
+            <details id="entry-schedule" hidden>
+                <summary>Schedule</summary>
+                <div id="entry-plans"></div>
+                <button type="button" id="add-schedule">Add time</button>
+            </details>
+        </section>
+        <section class="panel" id="appearance" aria-labelledby="appearance-title">
+            <header class="appearance-header"><h2 id="appearance-title">Appearance and animation</h2>
+                <button type="submit" form="style" id="apply-style" class="primary" title="Save this tab’s appearance and update its OBS graphics.">Apply Appearance</button></header>
+            <form id="style"><div id="style-fields"></div>
+                <div id="logo-field" hidden><label class="button" title="Choose an image to use between crawler entries.">Choose separator logo<input id="logo" type="file" accept="image/png,image/jpeg,image/gif,image/webp"></label><button type="button" id="remove-logo" title="Remove the uploaded separator image.">Clear logo</button><img id="logo-sample" alt="Selected separator logo" hidden></div>
+            </form>
+        </section>
+    </div>
+    <section class="panel" id="settings" hidden>
+        <h2>Global font override</h2>
+        <form id="global-font"><label class="check" title="Use this font across Broadcast Graphics while keeping each tab’s own selection."><input type="checkbox" id="override"> Use one font for every graphics tab</label>
+            <div id="global-font-picker"></div><button type="submit" class="primary">Save font settings</button></form>
+        <h2>Import / Export</h2>
+        <div class="row"><label>CSV library<select id="csv-kind"></select></label>
+            <label class="button">Import CSV<input id="settings-csv" type="file" accept=".csv,text/csv"></label>
+            <button id="settings-export">Export CSV</button></div>
+        <div class="row"><label class="button">Import graphics JSON<input id="json-file" type="file" accept=".json,application/json"></label>
+            <button id="json-export">Export graphics JSON</button></div>
+    </section>
+    <section class="panel" id="master" hidden><h2>Master Animation</h2>
+        <p>Play the entrance animation for checked graphics each time their scene goes to Program.</p>
+        <form id="master-form"><div id="master-fields"></div><button type="submit" class="primary">Save master animation</button></form>
+    </section>
+    <section class="panel" id="scheduler" hidden>
+        <h2>Scheduler</h2>
+        <label class="check"><input id="scheduler-enabled" type="checkbox"> Enable Scheduler</label>
+        <p>Use the OBS computer’s local time. Due changes wait for your approval.</p>
+        <div class="row">
+            <label class="button">Import schedule template<input id="schedule-import" type="file" accept=".json,application/json"></label>
+            <button id="schedule-export" type="button">Export schedules</button>
+            <button id="schedule-sample" type="button">Export CNN-style sample</button>
+        </div>
+        <div id="schedules"></div>
+    </section>
+</main>
+<aside id="schedule-prompt" aria-label="Scheduled change pending approval" hidden>
+    <div><small id="schedule-prompt-meta"></small><strong id="schedule-prompt-title"></strong><small id="schedule-prompt-target"></small></div>
+    <button id="schedule-accept" type="button" title="Apply this scheduled change" aria-label="Apply scheduled change">✓</button>
+    <button id="schedule-dismiss" type="button" title="Dismiss this scheduled change" aria-label="Dismiss scheduled change">×</button>
+</aside>
+<dialog id="schedule-dialog" aria-labelledby="schedule-title">
+    <form id="schedule-form">
+        <h2 id="schedule-title">Schedule entry</h2>
+        <p id="schedule-graphic"></p>
+        <label>Local date and time<input id="schedule-time" type="datetime-local" required></label>
+        <label>Repeat<select id="schedule-repeat"><option value="once">Once</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></label>
+        <label>OBS scene<select id="schedule-scene" required></select></label>
+        <label>Receiver<select id="schedule-receiver" required></select></label>
+        <div class="dialog-actions"><button type="button" id="schedule-cancel">Cancel</button><button type="submit" class="primary" id="schedule-save">Save schedule</button></div>
+        <p id="schedule-error" role="status" hidden></p>
+    </form>
+</dialog>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text"><form method="dialog">
+    <h2 id="confirm-title"></h2><div id="confirm-text"></div>
+    <div class="dialog-actions"><button id="confirm-cancel" value="cancel" autofocus>Cancel</button><button id="confirm-action" value="accept">Confirm</button></div>
+</form></dialog>
+<dialog id="csv-dialog" aria-labelledby="csv-title"><form id="mapping-form"><h2 id="csv-title">Map CSV columns</h2>
+    <label class="check"><input type="checkbox" id="csv-header" checked> First row contains headers</label>
+    <div id="mapping-fields"></div><small id="csv-example"></small><p id="csv-error" role="status"></p>
+    <div class="dialog-actions"><button type="button" id="cancel-csv">Cancel</button><button type="submit" id="import-confirm" class="primary">Import entries</button></div>
+</form></dialog>
+<script src="/graphics-render.js"></script>
+<script src="/graphics.js"></script>
+</body>
+</html>

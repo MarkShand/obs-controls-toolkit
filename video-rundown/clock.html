@@ -9,6 +9,8 @@ body{margin:0;background:var(--surface);color:#e0e8ee;font:13px system-ui,sans-s
 main{box-sizing:border-box;max-width:700px;margin:auto;padding:10px 12px;text-align:center}
 svg{display:block;width:100%;max-height:136px;fill:var(--digits)}
 .seg{opacity:.09}.seg.on,.punct{opacity:1}
+[hidden]{display:none!important}
+#clock-text{color:var(--digits);font-size:clamp(16px,9vw,74px);font-variant-numeric:tabular-nums;font-weight:650;line-height:1.1}
 #date{font-size:clamp(10px,3vw,14px);margin:4px 0 0;letter-spacing:.06em}
 details{margin:8px 0 0;text-align:left;color:#d3dce7}summary{cursor:pointer;font-size:11px}
 .colors{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0}
@@ -16,12 +18,21 @@ details{margin:8px 0 0;text-align:left;color:#d3dce7}summary{cursor:pointer;font
 </style>
 <main>
 <svg id="clock" viewBox="0 0 451 66" role="img" aria-label="Local time"></svg>
+<div id="clock-text" hidden></div>
 <p id="date"></p>
+<details><summary>Display and formats</summary><div class="colors">
+<label title="Show or hide the clock in this dock."><input type="checkbox" id="show-time" checked> Show time</label>
+<label title="Show or hide the date in this dock."><input type="checkbox" id="show-date" checked> Show date</label>
+<label title="Choose the time display format.">Time format <select id="time-format"></select></label>
+<label title="Choose the date display format.">Date format <select id="date-format"></select></label>
+<label title="Change the capitalization of the date and time labels.">Display Case <select id="display-case"></select></label>
+</div></details>
 <details><summary>Colors</summary><div class="colors">
-<label>Digits <input type="color" id="digits" value="#6cf5b2"></label>
-<label>Background <input type="color" id="surface" value="#10141a"></label>
+<label title="Choose the color of the clock digits.">Digits <input type="color" id="digits" value="#6cf5b2"></label>
+<label title="Choose the dock’s background color.">Background <input type="color" id="surface" value="#10141a"></label>
 </div></details>
 </main>
+<script src="/graphics-render.js"></script>
 <script>
 const svg = document.querySelector("#clock");
 const ns = "http://www.w3.org/2000/svg";
@@ -50,24 +61,59 @@ shape("rect",{x:292,y:53,width:7,height:7,rx:1,class:"punct"});
 const period = shape("text",{x:405,y:60,"font-size":21,"font-weight":700});
 const two = value => String(value).padStart(2,"0");
 const date = document.querySelector("#date");
-const dateFormat = new Intl.DateTimeFormat(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"});
-let shown = "", day = "";
+const clockText = document.querySelector("#clock-text");
+const showTime = document.querySelector("#show-time"), showDate = document.querySelector("#show-date");
+const timeFormat = document.querySelector("#time-format"), dateFormat = document.querySelector("#date-format");
+const displayCase = document.querySelector("#display-case");
+for (const [input, options, fallback] of [[timeFormat,graphicsTimeFormats,"12hmsms"],[dateFormat,graphicsDateFormats,"weekday"],
+    [displayCase,graphicsCaseOptions,"original"]]) {
+    input.replaceChildren(...Object.entries(options).map(([key,label]) => new Option(label,key)));
+    let saved;
+    try { saved = localStorage.getItem("production-clock-"+input.id); } catch {}
+    input.value = Object.hasOwn(options,saved) ? saved : fallback;
+}
+for (const input of [showTime,showDate,timeFormat,dateFormat,displayCase]) {
+    if (input.type === "checkbox") {
+        try { input.checked = localStorage.getItem("production-clock-"+input.id) !== "false"; } catch {}
+    }
+    input.onchange = () => {
+        try { localStorage.setItem("production-clock-"+input.id, input.type === "checkbox" ? input.checked : input.value); } catch {}
+        refreshDisplay();
+    };
+}
+let shown = "", dateKey = "", timer;
+function refreshDisplay() {
+    svg.hidden = !showTime.checked || timeFormat.value !== "12hmsms";
+    clockText.hidden = !showTime.checked || !svg.hidden;
+    date.hidden = !showDate.checked;
+    clearInterval(timer);
+    tick();
+    if (showTime.checked || showDate.checked) timer = setInterval(tick,showTime.checked && timeFormat.value.endsWith("hmsms") ? 33 : 250);
+}
 function tick() {
     const now = new Date();
+    if (!clockText.hidden || !date.hidden) {
+        const key = now.toDateString() + dateFormat.value + displayCase.value;
+        if (!clockText.hidden || key !== dateKey) {
+            const stamp = formatGraphicsClock(now,timeFormat.value,dateFormat.value);
+            const time=graphicsTextCase(stamp.time,displayCase.value);
+            if (!clockText.hidden && clockText.textContent !== time) clockText.textContent = time;
+            if (!date.hidden && key !== dateKey) { dateKey = key; date.textContent = graphicsTextCase(stamp.date,displayCase.value); }
+        }
+    }
+    if (svg.hidden) return;
     const hour = now.getHours();
     const time = two(hour % 12 || 12)+two(now.getMinutes())+two(now.getSeconds())+String(now.getMilliseconds()).padStart(3,"0");
     for (let i=0;i<time.length;i++) {
         if (shown[i] === time[i]) continue;
         cells[i].forEach((segment,j) => segment.classList.toggle("on",patterns[Number(time[i])].includes(String(j))));
     }
-    if (shown.slice(0,6) !== time.slice(0,6)) {
-        period.textContent = hour < 12 ? "AM" : "PM";
-        svg.setAttribute("aria-label",time.slice(0,2)+":"+time.slice(2,4)+":"+time.slice(4,6)+" "+period.textContent);
+    const suffix=graphicsTextCase(hour < 12 ? "AM" : "PM",displayCase.value);
+    if (shown.slice(0,6) !== time.slice(0,6) || period.textContent !== suffix) {
+        period.textContent=suffix;
+        svg.setAttribute("aria-label",time.slice(0,2)+":"+time.slice(2,4)+":"+time.slice(4,6)+" "+suffix);
     }
     shown = time;
-    const today = now.toDateString();
-    if (day !== today) { day = today; date.textContent = dateFormat.format(now); }
-    requestAnimationFrame(tick);
 }
 for (const key of ["digits","surface"]) {
     const input = document.querySelector("#"+key);
@@ -82,5 +128,5 @@ for (const key of ["digits","surface"]) {
     input.addEventListener("input",update);
     update();
 }
-tick();
+refreshDisplay();
 </script></html>
