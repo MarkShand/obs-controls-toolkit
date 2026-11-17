@@ -1,4 +1,4 @@
-![Demo animation](assets/demo-file.gif)
+![Demo animation](assets/demo-file-1.3.0.gif)
 # OBS Control Toolkit
 
 OBS shortcut controls, PTZ camera tracking, Broadcast Graphics, and a Video Rundown with a media library, Cue and On Air previews, playback history, CSV reports, and JSON backups.
