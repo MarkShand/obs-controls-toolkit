@@ -3,32 +3,50 @@
 
 OBS shortcut controls, FoMaKo camera tracking, and a Video Rundown with a media library, Cue and On Air previews, playback history, CSV reports, and JSON backups.
 
-## Windows installer
+## Set up once
 
-On Windows x64, open OBS Studio 31 or newer once, quit it, then run `OBS-Control-Toolkit-1.0.1-x64.msi`. Setup stops with a warning if OBS is still running. The MSI bundles Python, installs the toolkit under `%LOCALAPPDATA%\OBS Control Toolkit\App`, and registers scripts and docks for your Windows user. Reopen OBS and choose **Docks → Video Rundown**. If OBS WebSocket was already disabled, enable it with password protection under **Tools → WebSocket Server Settings** to control Program playback.
+### Requirements
+
+- **OBS Studio 31 or newer.** Open OBS once to create its settings, then exit it completely before installing the toolkit.
+- **OBS WebSocket.** Use the server that comes with OBS. Video Rundown needs it to create or adopt its scene and control playback on Program.
+- **Python.** The Windows x64 MSI bundles Python and its dependencies. The Windows folder-based setup checks for 64-bit Python 3.10 or newer with Tcl/Tk and can install it. For macOS, install Python 3.10 or newer for your Mac’s architecture before running setup. The folder-based setup downloads the Python packages it needs on the first run.
+
+### Windows installer
+
+1. Run `OBS-Control-Toolkit-1.0.1-x64.msi` while OBS is closed. If OBS is still running, setup asks you to exit it.
+2. Finish the installer. It places the toolkit under `%LOCALAPPDATA%\OBS Control Toolkit\App` and registers its scripts and docks for your Windows user.
+3. Reopen OBS and follow [Set up Video Rundown in OBS](#set-up-video-rundown-in-obs) below.
 
 Use Windows **Settings → Apps → Installed apps** to uninstall while OBS is closed. A fresh MSI installation stores the rundown separately under `%LOCALAPPDATA%\OBS Control Toolkit\Rundown`. When migrating a working folder-based setup, the installer keeps using its existing `video-rundown` data folder, so keep that folder available. Uninstall leaves the library, backups and linked videos available. If installation fails, check `%LOCALAPPDATA%\OBS Control Toolkit\InstallerState\setup.log`.
 
 To build the MSI, activate a Windows x64 Python 3.10+ environment with Tk and install `video-rundown/requirements.txt`. Obtain WiX 6 and the matching WiX UI and Util extensions, then run `python packaging/windows/build_msi.py --wix <wix.exe> --ui-extension <WixToolset.UI.wixext.dll> --util-extension <WixToolset.Util.wixext.dll> --out <output.msi> --work-dir <scratch-folder>`. Increment `--version` for a release that should upgrade an earlier MSI. Use `OBSCONFIG` with `msiexec` when registering a custom OBS profile. The build produces an unsigned MSI.
 
-## Set up once
+### Install from the toolkit folder
 
-1. Install **OBS Studio 31 or newer**. Open OBS once to create its settings, then quit OBS.
-2. Extract the toolkit to a folder you plan to keep, such as Documents. Run the setup command for your computer from the toolkit folder.
+1. Extract the toolkit to a folder you plan to keep, such as Documents.
+2. With OBS closed, run the setup command for your computer from the toolkit folder.
 
    | Computer | Setup file |
    | --- | --- |
    | Windows | `Setup-Windows.cmd` |
    | Mac | `bash ./Setup-Mac.command` in Terminal |
 
-3. Follow the prompts. On Windows, Setup uses an existing Python 3.10 or newer with Tcl/Tk when available. Otherwise it downloads and installs 64-bit Python with Tcl/Tk for your Windows user. On Mac, install Python 3.10 or newer before running Setup. Enter your FoMaKo camera's IPv4 address if you use tracking. Press Enter to skip it or keep your existing camera settings.
-4. When Setup finishes, open OBS. Choose **Docks → Video Rundown** and click **Set up scene** once per scene collection you use. If the dock offers **Use existing scene**, confirm only if the existing scene and player are your rundown pair. Import clips into **File Library**, then add them to **Playlist**.
+3. Follow the prompts. If setup offers to enable OBS WebSocket, choose **Yes** to enable it with password protection. If you use FoMaKo tracking, enter your camera’s IPv4 address. Press Enter to skip camera setup or keep your current camera settings.
+4. Reopen OBS and follow [Set up Video Rundown in OBS](#set-up-video-rundown-in-obs) below.
 
 Setup adds **OBS Controls**, **Video Rundown**, **Rundown Preview**, and **Production Clock** to the Docks menu. It adds toolkit script registrations to existing scene collections and preserves other scripts and dock entries. An enabled OBS WebSocket keeps its current port, password, and authentication settings. If WebSocket already exists and is disabled, Setup asks before enabling it with password protection. The dock services start when OBS loads the toolkit script and stop when it unloads. You can close Setup after installation.
 
 On macOS, the Lua runtime expects OBS at `/Applications/OBS.app`. Use an OBS build and Python distribution for your Mac’s architecture. Media drives and protected folders must be accessible to OBS and its Python helper. File and folder choices open the system picker directly. Windows uses the modern Explorer dialog and macOS uses its native file and folder dialogs.
 
-Internet access is needed on the first run to download Python packages. Mac notification popups use the optional Xcode Command Line Tools. Install those tools and rerun Setup if you want the popups.
+Mac notification popups use the optional Xcode Command Line Tools. Install those tools and rerun Setup if you want the popups.
+
+### Set up Video Rundown in OBS
+
+1. Open **Tools → WebSocket Server Settings**. If **Enable WebSocket server** is off, turn it on, check **Enable Authentication**, then click **OK**. If the server is already on, keep its current settings.
+2. Open **Docks → Video Rundown** and click **Set up scene**. Do this once for each scene collection you use. If the dock offers **Use existing scene**, confirm only if the scene and source are your intended rundown pair.
+3. In **File Library**, link a video or folder and add a clip to **Playlist**. Put the **Video Rundown** scene on **Program** and click **Play selected**.
+
+If **Set up scene** reports “OBS or local storage is unavailable,” check that **Enable WebSocket server** is on and retry. Cue preview can play files while the WebSocket server is off.
 
 ## Using the toolkit
 
