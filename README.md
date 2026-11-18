@@ -1,7 +1,7 @@
 ![Demo animation](assets/demo-file-1.3.0.gif)
 
 # Support the project
-[<img src="assets/kofi6.webp" alt="Support this project" width="200">](https://example.com)
+[<img src="assets/kofi6.webp" alt="Support this project" width="200">](https://ko-fi.com/bitwraith21)
 
 
 # OBS Control Toolkit
