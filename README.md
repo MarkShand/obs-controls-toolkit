@@ -1,5 +1,8 @@
-![Demo animation](assets/demo-file-1.3.0.gif)
+## Watch on YouTube
+[![Watch the demo](https://img.youtube.com/vi/whriXaQ6ErI/maxresdefault.jpg)](https://www.youtube.com/watch?v=whriXaQ6ErI)
 
+## Demo
+![Demo animation](assets/demo-file-1.3.0.gif)
 # Support the project
 [<img src="assets/kofi6.webp" alt="Support this project" width="200">](https://ko-fi.com/bitwraith21)
 
