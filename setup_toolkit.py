@@ -27,6 +27,7 @@ DOCKS = {
     "Video Rundown": "http://127.0.0.1:46643/",
     "Rundown Preview": "http://127.0.0.1:46643/preview",
     "Production Clock": "http://127.0.0.1:46643/clock",
+    "Broadcast Graphics": "http://127.0.0.1:46643/graphics",
 }
 
 

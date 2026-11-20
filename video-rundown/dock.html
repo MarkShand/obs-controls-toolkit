@@ -809,7 +809,7 @@ function render(state) {
     find("auto").checked = state.auto;
     find("auto-cut").value = state.auto_cut || "off";
     find("return-playback").value = state.return_playback || "restart";
-    const target = state.preview && state.preview !== "Video Rundown" ? state.preview : null;
+    const target = state.preview && !state.preview_has_rundown ? state.preview : null;
     find("cut").disabled = busy || !(state.return_ready || onAir) || !state.program || !target;
     find("cut-target").textContent = state.handoff || (target ? "OBS Preview: " + target : "Select a different Preview scene in Studio Mode.");
     if (state.return_ready && state.auto_cut === "off" && target) {
@@ -888,7 +888,7 @@ function render(state) {
     }
     drawEstimates();
     renderLists(state);
-    find("message").textContent = error || state.error || (!state.ready ? "Set up the scene and its Media Source once." : !state.program ? "Switch Video Rundown to Program when you’re ready to play." : "");
+    find("message").textContent = error || state.error || (!state.ready ? "Set up the scene and its Media Source once." : !state.program ? "Put a scene containing Rundown Player on Program when you’re ready to play." : "");
 }
 
 async function refresh() {

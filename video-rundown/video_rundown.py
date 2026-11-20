@@ -25,8 +25,10 @@ import math
 import threading
 import time
 import uuid
+from urllib.parse import parse_qs
 
 import obsws_python
+import graphics
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("OBS_TOOLKIT_RUNDOWN_DATA") or ROOT).resolve()
@@ -79,7 +81,7 @@ RENAME_SUGGESTIONS = {}
 WATCHED_FOLDERS = {}
 FAVORITE_TREES = {}
 state = dict(ready=False, program=False, current=None, auto=False, auto_cut="off", return_playback="restart",
-             preview=None, return_ready=False, status="Idle", cursor=0, duration=0, error="", air_revision=0)
+             preview=None, preview_has_rundown=False, return_ready=False, status="Idle", cursor=0, duration=0, error="", air_revision=0)
 client = None
 armed = False
 started = 0.0
@@ -91,6 +93,15 @@ def save_json(path, data):
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(path)
+
+
+graphics_library = graphics.Library(DATA / "graphics.json", save_json)
+GRAPHICS_ASSETS = {
+    "/graphics.css": ("graphics.css", "text/css"),
+    "/graphics.js": ("graphics.js", "text/javascript"),
+    "/graphics-render.js": ("graphics_render.js", "text/javascript"),
+    "/graphics-receiver.js": ("graphics_receiver.js", "text/javascript"),
+}
 
 
 def save_settings_files(updates):
@@ -1720,8 +1731,18 @@ def rundown_input(c, items):
 
 
 def rundown_ready(c):
-    source = rundown_input(c, c.get_scene_item_list(SCENE).scene_items)
-    return source is not None and source.get(RUNDOWN_OWNER) is True
+    try:
+        source = c.get_input_settings(SOURCE)
+    except obsws_python.error.OBSSDKRequestError as exc:
+        if exc.code == 600:
+            return False
+        raise
+    return source.input_kind == "ffmpeg_source" and source.input_settings.get(RUNDOWN_OWNER) is True
+
+
+def scene_has_rundown(c, scene, *, active=True):
+    return bool(scene) and any(item["sourceName"] == SOURCE for item, _ in
+                               graphics.walk_scene_items(c, scene, active_only=active))
 
 
 def source_is_shared(c, scenes):
@@ -1741,7 +1762,7 @@ def setup(adopt_existing=False):
     if scene_exists or source_exists:
         items = c.get_scene_item_list(SCENE).scene_items if scene_exists else []
         source = rundown_input(c, items) if source_exists else None
-        if source is not None and source.get(RUNDOWN_OWNER) is True:
+        if source_exists and scene_exists and rundown_ready(c) and scene_has_rundown(c, SCENE, active=False):
             state["ready"] = True
             return
         if source is None or source_is_shared(c, scenes):
@@ -1803,8 +1824,8 @@ def play(clip):
     item = require_playable(clip)
     global armed, started, sampled_at, held_path
     c = obs()
-    if c.get_current_program_scene().current_program_scene_name != SCENE:
-        raise ValueError("Put Video Rundown on Program before playing a clip.")
+    if not scene_has_rundown(c, c.get_current_program_scene().current_program_scene_name):
+        raise ValueError("Put a scene containing an enabled Rundown Player on Program before playing a clip.")
     if not rundown_ready(c):
         state["ready"] = False
         raise ValueError("Set up the Video Rundown scene and its media source first.")
@@ -1846,10 +1867,10 @@ def cut_to_preview():
     c = obs()
     scenes = c.get_scene_list()
     preview = scenes.current_preview_scene_name
-    if scenes.current_program_scene_name != SCENE:
+    if not scene_has_rundown(c,scenes.current_program_scene_name):
         raise ValueError("Video Rundown is no longer on Program.")
-    if not c.get_studio_mode_enabled().studio_mode_enabled or not preview or preview == SCENE:
-        raise ValueError("Select a different OBS Preview scene in Studio Mode.")
+    if not c.get_studio_mode_enabled().studio_mode_enabled or not preview or scene_has_rundown(c,preview):
+        raise ValueError("Select an OBS Preview scene without an active Rundown Player in Studio Mode.")
     transitions = c.get_scene_transition_list()
     cut = next((item["transitionName"] for item in transitions.transitions
                 if item["transitionKind"] == "cut_transition"), None)
@@ -1935,7 +1956,7 @@ def finish_clip():
 
 
 def start_on_program(previous, current):
-    if previous is None or previous == SCENE or current != SCENE:
+    if previous is None or previous or not current:
         return
     if not state["auto"] or not state["ready"]:
         return
@@ -1955,28 +1976,41 @@ def start_on_program(previous, current):
 def poll():
     global armed, client, sampled_at
     previous_program = None
+    previous_preview_has_rundown = None
+    previous_graphics_program = None
     while True:
         time.sleep(.4)
         with LOCK:
             try:
                 c = obs()
                 scenes = c.get_scene_list()
-                state["program"] = scenes.current_program_scene_name == SCENE
+                program_name = scenes.current_program_scene_name
+                state["program"] = scene_has_rundown(c,program_name)
                 state["preview"] = scenes.current_preview_scene_name
-                if not any(item["sceneName"] == SCENE for item in scenes.scenes):
-                    state.update(ready=False, setup_existing=False)
-                elif not state["ready"] or (state["program"] and previous_program != SCENE):
-                    items = c.get_scene_item_list(SCENE).scene_items
-                    source = rundown_input(c, items)
-                    ready = source is not None and source.get(RUNDOWN_OWNER) is True
+                state["preview_has_rundown"] = (state["program"] if state["preview"]==program_name
+                                                else scene_has_rundown(c,state["preview"]))
+                if (not state["ready"] or state["program"] != previous_program
+                        or state["preview_has_rundown"] != previous_preview_has_rundown):
+                    has_standalone = any(item["sceneName"] == SCENE for item in scenes.scenes)
+                    direct = rundown_input(c, c.get_scene_item_list(SCENE).scene_items) if has_standalone else None
+                    located = state["program"] or state["preview_has_rundown"] or (
+                        has_standalone and scene_has_rundown(c,SCENE,active=False))
+                    ready = located and rundown_ready(c)
                     if ready and previous_program is None and not state["current"] and not state.get("interrupted"):
-                        if source.get("local_file"):
+                        if c.get_input_settings(SOURCE).input_settings.get("local_file"):
                             release_rundown_media(c)
-                    state.update(ready=ready, setup_existing=not ready and source is not None)
+                    state.update(ready=ready, setup_existing=not ready and direct is not None)
+                previous_preview_has_rundown = state["preview_has_rundown"]
                 if not state["program"]:
                     state["return_ready"] = False
                 last_program = previous_program
-                previous_program = scenes.current_program_scene_name
+                previous_program = state["program"]
+                program_scene = next((item for item in scenes.scenes if item["sceneName"] == program_name),None)
+                graphics_program = graphics.scene_key(program_scene) if program_scene else None
+                if previous_graphics_program is not None and graphics_program and graphics_program != previous_graphics_program:
+                    with suppress(Exception):
+                        graphics_library.scene_live(graphics.scene_sources(c,program_name,ORIGIN,nested=True))
+                previous_graphics_program = graphics_program
                 start_on_program(last_program, previous_program)
                 if not state["current"]:
                     continue
@@ -2010,7 +2044,9 @@ def poll():
                     state.update(error="OBS could not play this clip. Check the file and codec.", current=None)
             except Exception:
                 previous_program = None
-                state.update(program=False, preview=None)
+                previous_preview_has_rundown = None
+                previous_graphics_program = None
+                state.update(program=False, preview=None, preview_has_rundown=False)
                 if client:
                     try:
                         client.disconnect()
@@ -2119,7 +2155,7 @@ def action(data):
         position = data.get("ms")
         c = obs()
         if (not state["current"] or state["current"] != data.get("id")
-                or c.get_current_program_scene().current_program_scene_name != SCENE):
+                or not scene_has_rundown(c,c.get_current_program_scene().current_program_scene_name)):
             raise ValueError("That clip is no longer on air.")
         media = c.get_media_input_status(SOURCE)
         duration = media.media_duration or 0
@@ -2292,7 +2328,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", mime + "; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy",
-                         "default-src 'none'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self'; img-src 'self'; frame-ancestors 'none'")
+                         "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -2379,6 +2415,50 @@ class PreviewHandler(BaseHTTPRequestHandler):
         pass
 
 
+def reveal_graphics_export(path):
+    path = path.resolve()
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            ole, shell = ctypes.windll.ole32, ctypes.windll.shell32
+            if ole.CoInitialize(None) < 0:
+                return False
+            item = ctypes.c_void_p()
+            try:
+                parsed = shell.SHParseDisplayName(ctypes.c_wchar_p(str(path)), None, ctypes.byref(item), 0, None)
+                return parsed == 0 and shell.SHOpenFolderAndSelectItems(item, 0, None, 0) == 0
+            finally:
+                if item:
+                    ole.CoTaskMemFree(item)
+                ole.CoUninitialize()
+        elif sys.platform == "darwin":
+            return subprocess.run(["/usr/bin/open", "-R", str(path)], capture_output=True, timeout=4).returncode == 0
+        else:
+            return False
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def graphics_target(client, kind, scene, target, *, preview=False):
+    scenes = client.get_scene_list()
+    name = next((item["name"] for item in graphics.scene_targets(scenes) if item["key"] == scene),None)
+    if name is None:
+        raise ValueError("That OBS scene changed. Reload scenes first.")
+    if preview:
+        program = scenes.current_program_scene_name
+        if program == name or any(row["key"]==target and row["kind"]==kind and row["enabled"]
+                                 for row in graphics.scene_sources(client,program,ORIGIN,nested=True)):
+            raise ValueError("Choose a scene and receiver that are off air to preview in OBS.")
+    source = next((row for row in graphics.scene_sources(client,name,ORIGIN)
+                   if row["kind"]==kind and row["key"]==target),None)
+    if not source:
+        raise ValueError("That OBS receiver was removed. Reload scenes and select another receiver.")
+    if not source["enabled"]:
+        raise ValueError("Turn on the graphic’s visibility in OBS Sources first.")
+    return source
+
+
 class Handler(PreviewHandler):
     def do_GET(self):
         if self.headers.get("Host") != HOST:
@@ -2387,6 +2467,8 @@ class Handler(PreviewHandler):
             self.reply(200, (ROOT / "dock.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN), "text/html")
         elif self.path == "/clock":
             self.reply(200, (ROOT / "clock.html").read_text(encoding="utf-8"), "text/html")
+        elif self.path.startswith("/graphics"):
+            self.serve_graphics()
         elif self.path == "/preview":
             self.reply(200, (ROOT / "preview.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN), "text/html")
         elif self.path == "/preview-state":
@@ -2446,6 +2528,160 @@ class Handler(PreviewHandler):
         else:
             self.reply(404, "{}")
 
+    def serve_graphics(self):
+        path, _, query = self.path.partition("?")
+        if path == "/graphics":
+            self.reply(200, (ROOT / "graphics.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN), "text/html")
+        elif path in GRAPHICS_ASSETS:
+            name, mime = GRAPHICS_ASSETS[path]
+            self.reply(200, (ROOT / name).read_text(encoding="utf-8"), mime)
+        elif route := re.fullmatch(r"/graphics-(overlay|output)/([a-z]+)/([a-f0-9]{32})", path):
+            operation, kind, target = route.groups()
+            if kind not in graphics.LABELS:
+                self.reply(404, "{}")
+            elif operation == "overlay":
+                self.reply(200, (ROOT / "graphics_overlay.html").read_text(encoding="utf-8"), "text/html")
+            else:
+                try:
+                    scene = graphics_library.preview_scene(kind,target)
+                    if scene:
+                        try:
+                            with LOCK:
+                                graphics_target(obs(),kind,scene,target,preview=True)
+                        except Exception:
+                            graphics_library.preview(kind,target,{"action":"preview-stop"})
+                            scene = None
+                    frame = graphics_library.output(kind,target,query.removeprefix("revision="),preview_scene=scene)
+                    self.reply(204 if frame is None else 200, json.dumps(frame) if frame is not None else "")
+                except (OSError, ValueError):
+                    self.reply(503, "{}")
+        elif path in ("/graphics-scenes", "/graphics-fonts", "/graphics-scheduler") or path.startswith("/graphics-library/"):
+            if not hmac.compare_digest(self.headers.get("X-Rundown", "").encode(), TOKEN.encode()):
+                self.reply(403, "{}")
+                return
+            if path == "/graphics-scenes":
+                try:
+                    with LOCK:
+                        result = graphics.scenes(obs(), ORIGIN)
+                except Exception:
+                    self.reply(503, json.dumps({"error": "Connect to OBS WebSocket from Tools → WebSocket Server Settings, then reload scenes."}))
+                    return
+            elif path == "/graphics-fonts":
+                result = dict(fonts=graphics.installed_fonts())
+            elif path == "/graphics-scheduler":
+                try:
+                    result = graphics_library.scheduler_view()
+                except (OSError, ValueError):
+                    self.reply(503, json.dumps({"error":"Could not read the graphics scheduler data."}))
+                    return
+            else:
+                kind = path.removeprefix("/graphics-library/")
+                if kind not in (*graphics.LABELS, "settings"):
+                    self.reply(404, "{}")
+                    return
+                try:
+                    result = graphics_library.editor(kind)
+                except (OSError, ValueError):
+                    self.reply(503, json.dumps({"error": "Could not load graphics.json. Check the stored data file and permissions."}))
+                    return
+            self.reply(200, json.dumps(result))
+        else:
+            self.reply(404, "{}")
+
+    def change_graphics(self, length):
+        path, _, query = self.path.partition("?")
+        if path.startswith("/graphics-import/"):
+            if not 0 < length <= graphics.CSV_LIMIT:
+                raise ValueError("Choose a graphics file up to 16 MB.")
+            payload = self.rfile.read(length)
+            if len(payload) != length:
+                raise ValueError("Select a complete graphics file.")
+            kind = path.removeprefix("/graphics-import/")
+            if kind == "json":
+                return graphics_library.import_json(payload)
+            if kind == "schedule":
+                return self.graphics_schedule("schedule-import",json.loads(payload))
+            options = json.loads(parse_qs(query).get("options", ["{}"])[0])
+            if not isinstance(options, dict):
+                raise ValueError("Choose valid import options.")
+            if kind == "preview":
+                return graphics.csv_preview(payload, options.get("header") is True)
+            if kind in graphics.LIBRARIES:
+                return graphics_library.save_edit(kind,"import",graphics.csv_entries(kind,payload,options))
+            raise ValueError("Choose a CSV library or JSON import.")
+        kind = path.removeprefix("/graphics-command/")
+        if kind not in (*graphics.LABELS, "settings", "scheduler") or not 0 < length <= 1024 * 1024:
+            raise ValueError("Choose a graphics tab and action.")
+        data = json.loads(self.rfile.read(length))
+        if not isinstance(data, dict):
+            raise ValueError("Invalid graphics request.")
+        command = data.get("action")
+        if kind == "scheduler":
+            return self.graphics_schedule(command,data)
+        if command == "export":
+            try:
+                result = graphics_library.export(kind,data.get("format"))
+            except OSError as exc:
+                raise ValueError("The destination folder could not be written.") from exc
+            if data.get("reveal") is True:
+                result["revealed"] = reveal_graphics_export(Path(result["path"]))
+            return result
+        if kind == "settings" and command == "settings":
+            return graphics_library.save_edit(kind,command,data)
+        if kind not in graphics.LABELS:
+            raise ValueError("Choose a graphics tab.")
+        if command in ("save", "delete", "style", "clear"):
+            return graphics_library.save_edit(kind, command, data)
+        target = data.get("target")
+        scene = data.get("scene")
+        if command not in ("setup", "show", "hide", "autoplay-start", "autoplay-stop", "preview", "preview-stop"):
+            raise ValueError("Select an OBS scene and action.")
+        if command != "setup" and (not isinstance(target,str) or not graphics.TARGET.fullmatch(target)):
+            raise ValueError("Select a receiver first.")
+        if command.startswith("autoplay-") and kind != "headlines":
+            raise ValueError("Autoplay is available for headlines.")
+        if command=="preview-stop":
+            graphics_library.preview(kind,target,data)
+            return {}
+        if command in ("setup", "show", "autoplay-start", "preview"):
+            try:
+                with LOCK:
+                    client = obs()
+                    if command == "setup":
+                        return graphics.set_up_source(client, kind, scene, ORIGIN, graphics_library.editor(kind)["style"])
+                    source = graphics_target(client,kind,scene,target,preview=command=="preview")
+                    if command=="preview":
+                        graphics_library.preview(kind,target,data)
+                        return dict(receiver=source["name"])
+                    graphics_library.take(kind,target,data)
+                    return dict(receiver=source["name"])
+            except ValueError:
+                raise
+            except Exception as exc:
+                if isinstance(exc, obsws_python.error.OBSSDKRequestError):
+                    raise ValueError(f"OBS rejected {exc.req_name} (code {exc.code}). Check that Browser Source is available.") from exc
+                raise ValueError("Connect to OBS WebSocket from Tools → WebSocket Server Settings, then retry.") from exc
+        graphics_library.take(kind, target, data)
+        return {}
+
+    def graphics_schedule(self, command, data):
+        needs_scenes = command in ("schedule-save","schedule-import","schedule-accept","schedule-sample")
+        with LOCK:
+            scenes = []
+            if needs_scenes:
+                try:
+                    scenes = graphics.scenes(obs(),ORIGIN)["scenes"]
+                except Exception as exc:
+                    if command != "schedule-sample":
+                        raise ValueError("Connect to OBS WebSocket to verify Scheduler targets.") from exc
+            try:
+                result = graphics_library.schedule_command(command,data,scenes)
+            except OSError as exc:
+                raise ValueError("The Scheduler data or export folder could not be written.") from exc
+        if "path" in result and data.get("reveal") is True:
+            result["revealed"] = reveal_graphics_export(Path(result["path"]))
+        return result
+
     def allowed(self):
         return (self.headers.get("Host") == HOST and self.headers.get("Origin") == ORIGIN
                 and hmac.compare_digest(self.headers.get("X-Rundown", ""), TOKEN))
@@ -2457,7 +2693,10 @@ class Handler(PreviewHandler):
         self.connection.settimeout(30)
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if self.path in {"/lan-monitor", "/cue-clock"} and 0 < length <= 2048:
+            if self.path.startswith(("/graphics-command/", "/graphics-import/")):
+                self.reply(200, json.dumps(self.change_graphics(length)))
+                return
+            elif self.path in {"/lan-monitor", "/cue-clock"} and 0 < length <= 2048:
                 data = json.loads(self.rfile.read(length))
                 if not isinstance(data, dict):
                     raise ValueError("Invalid request.")
@@ -2808,6 +3047,7 @@ def main(stop=None):
         threading.Thread(target=poll, daemon=True).start()
         threading.Thread(target=scan_library_metadata, daemon=True).start()
         threading.Thread(target=watch_folder_changes, daemon=True).start()
+        threading.Thread(target=advance_graphics, args=(stop,), daemon=True).start()
         print("OBS Video Rundown running at " + ORIGIN, flush=True)
         restore_lan_monitor()
         try:
@@ -2820,6 +3060,19 @@ def main(stop=None):
         finally:
             with LAN_LOCK:
                 stop_lan_monitor()
+
+
+def advance_graphics(stop):
+    next_schedule = 0
+    while stop is None or not stop.is_set():
+        time.sleep(.25)
+        try:
+            graphics_library.advance(time.monotonic())
+            if time.monotonic() >= next_schedule:
+                graphics_library.advance_schedule(datetime.now())
+                next_schedule = time.monotonic() + 1
+        except (OSError, ValueError):
+            time.sleep(3)
 
 
 def load_rundown():
