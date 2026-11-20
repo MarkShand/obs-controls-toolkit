@@ -3,6 +3,7 @@
 import copy
 import csv
 import base64
+from collections import defaultdict
 from datetime import datetime
 from functools import lru_cache
 import hashlib
@@ -19,16 +20,51 @@ from uuid import uuid4
 import graphics_schedule as schedule
 
 
-LABELS = dict(names="Names", headlines="Headlines", programs="Program", crawlers="Crawler", clock="Clock", date="Date")
-LIBRARIES = ("names", "headlines", "programs", "crawlers")
+LABELS = dict(names="Names", headlines="Headlines", programs="Program", crawlers="Crawler", clock="Clock", date="Date", custom="Custom")
+LIBRARIES = ("names", "headlines", "programs", "crawlers", "custom")
 DIMENSIONS = {"names":(760, 196), "headlines":(1650, 240), "programs":(1040, 160),
-              "crawlers":(1920, 128), "clock":(480, 134), "date":(630, 134)}
+              "crawlers":(1920, 128), "clock":(480, 134), "date":(630, 134), "custom":(640, 176)}
 MASTER_DEFAULTS = {kind: kind in {"names", "programs"} for kind in LABELS}
 ANIMATIONS = ("slide", "fade", "wipe", "cut")
 DIRECTIONS = ("right", "left", "up", "down")
 TEXT_CASES = ("original", "sentence", "lower", "upper", "title")
-FIELDS = {"names":("text", "description", "show_description"), "headlines":("text",),
-          "programs":("text",), "crawlers":("text",)}
+COLOR_FIELDS = ("foreground", "secondary", "background", "description_background")
+DESCRIPTION_FIELDS = ("description", "show_description")
+CUSTOM_CHOICES = dict(horizontal=("left", "center", "right"), vertical=("top", "middle", "bottom"),
+                      align=("left", "center", "right"), animation=ANIMATIONS, direction=DIRECTIONS)
+CUSTOM_FIELDS = (*CUSTOM_CHOICES, "duration")
+MULTIPLE_RECEIVERS = {"names", "custom"}
+FIELDS = {"names":("text", *DESCRIPTION_FIELDS), "headlines":("text",),
+          "programs":("text",), "crawlers":("text",), "custom":("text", *DESCRIPTION_FIELDS, *COLOR_FIELDS, *CUSTOM_FIELDS)}
+CSV_HEADERS = {
+    "names": ("name",), "headlines": ("headline",), "programs": ("program_name", "program"),
+    "crawlers": ("crawler_text", "crawler"), "custom": ("custom_label", "custom", "label"),
+}
+CSV_EXAMPLES = {
+    "names": ["Maya Brooks", "Studio Anchor", "yes"],
+    "headlines": ["Local film festival opens this weekend"],
+    "programs": ["Evening Report"],
+    "crawlers": ["Coming up next: a look at today's forecast"],
+    "custom": ["FILE VIDEO", "November 18, 2026", "yes", "#FFFFFF", "#FFFFFF", "#9E222C", "#202430",
+               "right", "top", "left", "slide", "right", "350"],
+}
+BUILTIN_PRESETS = {
+    "On Air Red": ("FFFFFF", "FFFFFF", "9E222C", "55151D"),
+    "Network Navy": ("FFFFFF", "E2EEFF", "113659", "09253F"),
+    "Midnight": ("FFFFFF", "DCE4EF", "172331", "0C1621"),
+    "Broadcast Black": ("FFFFFF", "E4E7EB", "191A1D", "313339"),
+    "Control Room Slate": ("FFFFFF", "ECF2F7", "3C4B5F", "202B39"),
+    "Studio White": ("172131", "374459", "FFFFFF", "DFE7F2"),
+    "Newsprint": ("1E262D", "343E44", "F4F0E7", "E6DFD3"),
+    "Signal Blue": ("FFFFFF", "E8F1FF", "194A92", "133265"),
+    "Deep Teal": ("FFFFFF", "E5F8F5", "0A574F", "043B36"),
+    "Field Green": ("FFFFFF", "EEF8E7", "335335", "233821"),
+    "Burgundy": ("FFFFFF", "F7E4EC", "602643", "381A2B"),
+    "Executive Plum": ("FFFFFF", "F0E7FC", "4B3568", "322445"),
+    "Editorial Copper": ("FFFFFF", "FFF1E7", "854327", "592E1D"),
+    "Alert Amber": ("24211D", "EFE8D8", "F3BE53", "4D3719"),
+    "Glacier": ("102D42", "183B50", "D4F0F5", "A9D7E2"),
+}
 CSV_LIMIT = 16 * 1024**2
 OWNER = "obs_controls_toolkit_graphics"
 TARGET = re.compile(r"[a-f0-9]{32}")
@@ -42,19 +78,22 @@ MODELS = {
     "clock": dict(x=74, y=7, width=23, font=42, lines=1, show_time=True, show_date=True,
                   time_format="12hms", date_format="short"),
     "date": dict(x=66, y=18, width=31, font=42, lines=1, date_format="short"),
+    "custom": dict(x=62, y=5, width=34, font=46, lines=1),
 }
 
 
 def default_style(kind):
-    horizontal = {"names":"left", "programs":"right"}.get(kind,"center")
+    horizontal = {"names":"left", "programs":"right", "custom":"right"}.get(kind,"center")
     return dict(MODELS[kind], foreground="#14171c", secondary="#39434e", background="#ffffff",
                 transparent=False, opacity=100, radius=7, padding=18, align=horizontal, text_vertical="middle",
                 padding_mode="all", padding_top=18, padding_right=18, padding_bottom=18, padding_left=18,
                 family="Arial", bold=False,
                 animation="slide", direction="right", duration=350, text_case="original",
-                background_size="manual", manual_width=None, horizontal=horizontal, vertical="middle",
+                background_size="fit" if kind == "custom" else "manual", manual_width=None, horizontal=horizontal, vertical="middle",
                 corners="individual" if kind == "names" else "all",
-                radius_tl=7, radius_tr=7, radius_br=7, radius_bl=7, description_font=None)
+                radius_tl=7, radius_tr=7, radius_br=7, radius_bl=7, description_font=None,
+                **(dict(description_background="#e6edf5", description_transparent=True, description_layout="compact")
+                   if kind in ("names", "custom") else {}))
 
 
 def font_name(value):
@@ -89,6 +128,7 @@ def validate_style(kind, data):
     options = dict(align=("left", "center", "right"), time_format=TIME_FORMATS, date_format=DATE_FORMATS,
                    animation=ANIMATIONS, direction=DIRECTIONS, text_case=TEXT_CASES, advance=("animated", "cut"),
                    separator=("space", "dot", "logo"), background_size=("manual", "fit", "fill"),
+                   description_layout=("compact", "band"),
                    horizontal=("existing", "left", "center", "right"), vertical=("existing", "top", "middle", "bottom"),
                    corners=("all", "individual"), padding_mode=("all", "sides"), text_vertical=("top", "middle", "bottom"))
     for key, default in style.items():
@@ -131,13 +171,41 @@ def entry_text(value, *, required=False, limit):
 def make_entry(kind, data, key=None):
     limit = 2000 if kind == "crawlers" else 600 if kind == "headlines" else 200
     result = dict(id=key or uuid4().hex, text=entry_text(data.get("text", ""), required=True, limit=limit))
-    if kind == "names":
+    if kind in ("names", "custom"):
         result["description"] = entry_text(data.get("description", ""), limit=200)
         show_description = data.get("show_description", True)
         if type(show_description) is not bool:
             raise ValueError("Choose whether to show the description.")
         result["show_description"] = show_description
+    if kind == "custom":
+        result.update({field: hex_color(data.get(field), optional=True) for field in COLOR_FIELDS})
+        for field in CUSTOM_FIELDS:
+            value = data.get(field)
+            if value is not None:
+                valid = type(value) is int and 50 <= value <= 3000 if field == "duration" else value in CUSTOM_CHOICES[field]
+                if not valid:
+                    raise ValueError(f"Invalid Custom entry setting ({field}).")
+            result[field] = value
+        source = data.get("default_source")
+        if source is not None:
+            if not isinstance(source, dict) or set(source) != {"scene", "receiver"} or not all(map(schedule.is_id, source.values())):
+                raise ValueError("Choose a valid default OBS source.")
+        result["default_source"] = source
     return result
+
+
+def require_default_source(entry, scene, receiver):
+    source = entry.get("default_source")
+    if source and source != {"scene": scene, "receiver": receiver}:
+        raise ValueError("This entry is assigned to another OBS source. Select its default source first.")
+
+
+def hex_color(value, *, optional=False):
+    if optional and value in (None, ""):
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"#[a-fA-F0-9]{6}", value.strip()):
+        raise ValueError("Use a six-digit HEX color like #26415B.")
+    return value.strip().upper()
 
 
 def csv_rows(payload):
@@ -149,7 +217,11 @@ def csv_rows(payload):
         sample = decoded[:4096]
         delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter if sample.strip() else ","
     except csv.Error:
-        delimiter = ","
+        first = next((line for line in sample.splitlines() if line.strip()), "")
+        try:
+            delimiter = csv.Sniffer().sniff(first, delimiters=",;\t").delimiter
+        except csv.Error:
+            delimiter = ","
     try:
         for index, row in enumerate(csv.reader(io.StringIO(decoded, newline=""), delimiter=delimiter, strict=True), 1):
             if any(field.strip() for field in row):
@@ -158,11 +230,52 @@ def csv_rows(payload):
         raise ValueError(f"Could not read CSV. {exc}") from exc
 
 
-def csv_preview(payload, has_header):
+CSV_ALIASES = {
+    "description": ("description", "role", "subtitle", "location"),
+    "show_description": ("show_description",),
+    "foreground": ("foreground", "text_color", "main_text_color"),
+    "secondary": ("secondary", "description_color", "description_text_color"),
+    "background": ("background", "background_color"),
+    "description_background": ("description_background", "description_background_color"),
+    **{field: (field,) for field in CUSTOM_FIELDS if field != "duration"},
+    "duration": ("duration", "duration_ms"),
+}
+
+
+def csv_schema(kind):
+    return dict(columns=["number", CSV_HEADERS[kind][0], *FIELDS[kind][1:]],
+                sample=["1", *CSV_EXAMPLES[kind]])
+
+
+def csv_key(value):
+    return re.sub(r"[\s_-]+", "_", value.strip().casefold())
+
+
+def csv_mapping(kind, headers):
+    normalized = [csv_key(value) for value in headers]
+    types = [key for key, aliases in CSV_HEADERS.items() if any(alias in normalized for alias in aliases)]
+    if kind is None and len(types) == 1:
+        kind = types[0]
+    if not isinstance(kind, str) or kind not in CSV_HEADERS:
+        return {}, types, ""
+    if types and kind not in types:
+        names = ", ".join(LABELS[key] for key in types)
+        return {}, types, f"This file has {names} columns. For {LABELS[kind]}, use the format shown below."
+    fields = dict(text=(*CSV_HEADERS[kind], "text", "title"), **CSV_ALIASES)
+    mapping = {}
+    for field in FIELDS[kind]:
+        for alias in fields[field]:
+            if normalized.count(alias) == 1:
+                mapping[field] = normalized.index(alias)
+                break
+    return mapping, types, ""
+
+
+def csv_preview(payload, has_header, kind=None):
     rows = csv_rows(payload)
     first = next(rows, None)
     if first is None:
-        raise ValueError("The CSV is empty.")
+        return dict(columns=[], sample=[], mapping={}, types=[], warning="", empty=True)
     samples = [row for _, row in islice(rows,3)]
     headers = first[1] if has_header else []
     if not has_header:
@@ -171,43 +284,115 @@ def csv_preview(payload, has_header):
     if count > 200:
         raise ValueError("Choose a CSV with at most 200 columns.")
     columns = [(headers[i] if i < len(headers) else "").strip()[:160] or f"Column {i+1}" for i in range(count)]
-    return dict(columns=columns, sample=[[value[:120] for value in row] for row in samples[:3]])
+    mapping, types, warning = csv_mapping(kind, headers)
+    return dict(columns=columns, sample=[[value[:120] for value in row] for row in samples[:3]],
+                mapping=mapping, types=types, warning=warning, empty=not samples)
 
 
 def csv_entries(kind, payload, options):
+    rows = csv_rows(payload)
+    if options.get("header") is True:
+        header = next(rows, None)
+        if header is None:
+            return []
+        headers = header[1]
+        _, _, warning = csv_mapping(kind, headers)
+        if warning:
+            raise ValueError(warning)
     mapping = options.get("mapping", {})
     if not isinstance(mapping, dict) or type(mapping.get("text")) is not int or any(
         key not in FIELDS[kind] or type(index) is not int or not 0 <= index < 200 for key,index in mapping.items()
     ) or len(set(mapping.values())) != len(mapping):
         raise ValueError("Map a different CSV column to each selected field, including the main text field.")
-    rows = csv_rows(payload)
     if options.get("header") is True:
-        next(rows, None)
+        column = mapping["text"]
+        if column >= len(headers):
+            raise ValueError("Map the main text to a column in the CSV header.")
+        key = csv_key(headers[column])
+        wrong = next((other for other, aliases in CSV_HEADERS.items() if other != kind and key in aliases), None)
+        if key in ("number", "no", "#") or wrong:
+            raise ValueError(f"Map the main text to the {CSV_HEADERS[kind][0]} column.")
     result = []
     for index, row in rows:
         try:
             data = {key: row[column] if column < len(row) else "" for key,column in mapping.items()}
+            if not data["text"].strip():
+                continue
             if "show_description" in data:
                 option = data["show_description"].strip().casefold()
                 if option not in ("", "yes", "true", "1", "no", "false", "0"):
                     raise ValueError("Show description must use yes/no, true/false, or 1/0.")
                 data["show_description"] = option not in ("no", "false", "0")
+            if kind == "custom":
+                for field in CUSTOM_FIELDS:
+                    if field in data:
+                        value = data[field].strip().casefold()
+                        if field == "duration" and value:
+                            if not value.isdecimal() or len(value) > 4:
+                                raise ValueError("Use an animation duration from 50 to 3000 milliseconds.")
+                            value = int(value)
+                        data[field] = value or None
             result.append(make_entry(kind, data))
         except ValueError as exc:
             raise ValueError(f"CSV record {index}. {exc}") from exc
-    if not result:
-        raise ValueError("The CSV contains no entries.")
     return result
+
+
+def csv_batch(files):
+    if not isinstance(files, list) or not files:
+        raise ValueError("Stage at least one CSV file to import.")
+    records, size = [], 0
+    for file in files:
+        if not isinstance(file, dict) or not isinstance(file.get("kind"), str) or file["kind"] not in CSV_HEADERS:
+            raise ValueError("Choose a destination for each CSV.")
+        kind = file["kind"]
+        name = str(file.get("name", "CSV"))[:240]
+        try:
+            payload = base64.b64decode(file.get("data", ""), validate=True)
+            size += len(payload)
+            if size > CSV_LIMIT:
+                raise ValueError("Choose CSV files totaling up to 16 MB per batch.")
+            records.append((kind, csv_entries(kind, payload, file)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} — {exc}") from exc
+    return records
+
+
+def clean_preset(data, key):
+    if not isinstance(data, dict):
+        raise ValueError("Choose a valid color preset.")
+    colors = {field: hex_color(data.get(field)) for field in COLOR_FIELDS}
+    return dict(id=key, name=entry_text(data.get("name"), required=True, limit=60), **colors)
+
+
+def color_presets(saved):
+    items = [dict(id=f"builtin-{index}", name=name, **dict(zip(COLOR_FIELDS, ("#" + color for color in values))))
+             for index,(name,values) in enumerate(BUILTIN_PRESETS.items())]
+    edited = {item["id"] for item in saved}
+    return saved + [item for item in items if item["id"] not in edited]
 
 
 def validate_settings(settings):
     if not isinstance(settings, dict) or not isinstance(settings.get("master", {}), dict):
         raise ValueError("Choose valid graphics settings.")
     override = settings.get("override", False)
+    custom_override = settings.get("custom_override", False)
     master = {kind:settings.get("master", {}).get(kind, default) for kind,default in MASTER_DEFAULTS.items()}
-    if type(override) is not bool or any(type(value) is not bool for value in master.values()):
+    if type(override) is not bool or type(custom_override) is not bool or any(type(value) is not bool for value in master.values()):
         raise ValueError("Choose whether to enable each setting.")
-    return dict(override=override, family=font_name(settings.get("family", "Arial")), master=master)
+    saved = settings.get("color_presets", [])
+    if not isinstance(saved, list):
+        raise ValueError("Choose a valid list of color presets.")
+    presets, ids = [], set()
+    factory = {preset["id"] for preset in color_presets([])}
+    for item in saved:
+        key = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(key, str) or (not TARGET.fullmatch(key) and key not in factory) or key in ids:
+            raise ValueError("The data contains an invalid or duplicate color preset ID.")
+        ids.add(key)
+        presets.append(clean_preset(item, key))
+    return dict(override=override, family=font_name(settings.get("family", "Arial")), master=master,
+                custom_override=custom_override, color_presets=presets)
 
 
 @lru_cache(maxsize=1)
@@ -319,14 +504,34 @@ class Library:
     def editor(self, kind):
         with self.lock:
             data = self.read()
-            return dict(entries=data["entries"].get(kind, []), style=data["styles"].get(kind), settings=data["settings"])
+            settings = data["settings"]
+            return dict(entries=data["entries"].get(kind, []), style=data["styles"].get(kind), settings=settings,
+                        presets=color_presets(settings["color_presets"]),
+                        csv_templates={key: csv_schema(key) for key in LIBRARIES})
+
+    def autoplay_receivers(self):
+        with self.lock:
+            return {key.removeprefix("headlines/") for key, state in self.live().items()
+                    if key.startswith("headlines/") and state.get("autoplay")}
 
     def save_edit(self, kind, action, data):
         with self.lock:
             update = copy.deepcopy(self.read())
             result = {}
             if action == "settings":
-                update["settings"] = validate_settings(data.get("settings"))
+                changes = data.get("settings")
+                if not isinstance(changes, dict):
+                    raise ValueError("Choose valid graphics settings.")
+                allowed = ("override", "family", "master", "custom_override")
+                update["settings"] = validate_settings(dict(update["settings"], **{key:changes[key] for key in allowed if key in changes}))
+            elif action == "preset":
+                saved = update["settings"]["color_presets"]
+                key = data.get("id")
+                if key and not any(item["id"] == key for item in color_presets(saved)):
+                    raise ValueError("Choose an existing color preset.")
+                preset = clean_preset(data, key or uuid4().hex)
+                update["settings"]["color_presets"] = [preset, *(item for item in saved if item["id"] != key)]
+                result = dict(id=preset["id"], presets=color_presets(update["settings"]["color_presets"]))
             elif action == "style":
                 update["styles"][kind] = validate_style(kind, data.get("style"))
             elif kind not in LIBRARIES:
@@ -348,12 +553,20 @@ class Library:
                         update["scheduler"][field] = [row for row in update["scheduler"][field]
                                                       if row["kind"]!=kind or row["entry"]!=key]
                 elif action == "save":
+                    if kind == "custom" and index is not None and "default_source" not in data:
+                        data = dict(data, default_source=entries[index]["default_source"])
                     item = make_entry(kind, data,key)
                     if index is None:
                         entries.append(item)
                     else:
                         entries[index] = item
                     result = dict(id=item["id"])
+                    if source := item.get("default_source"):
+                        result["schedule_conflicts"] = sum(
+                            row["kind"] == kind and row["entry"] == item["id"] and schedule.pending(row)
+                            and (row["scene"], row["receiver"]) != (source["scene"], source["receiver"])
+                            for row in update["scheduler"]["plans"]
+                        )
                 else:
                     raise ValueError("Select an entry first.")
             self.save(self.path, update)
@@ -361,6 +574,19 @@ class Library:
             if action in ("style", "settings"):
                 self.revision = uuid4().hex
             return result
+
+    def import_batch(self, records):
+        with self.lock:
+            update = copy.deepcopy(self.read())
+            counts = {}
+            for kind, entries in records:
+                if entries:
+                    update["entries"][kind].extend(entries)
+                    counts[kind] = counts.get(kind, 0) + len(entries)
+            if counts:
+                self.save(self.path, update)
+                self.data = update
+            return dict(imported=sum(counts.values()), counts=counts)
 
     def import_json(self, payload):
         try:
@@ -387,7 +613,7 @@ class Library:
                 with path.open("x",encoding="utf-8-sig",newline="") as stream:
                     writer = csv.writer(stream)
                     fields = FIELDS[kind]
-                    writer.writerow(("number", *fields))
+                    writer.writerow(csv_schema(kind)["columns"])
                     for number,item in enumerate(data["entries"][kind],1):
                         writer.writerow((number,*(item.get(key,"") for key in fields)))
             else:
@@ -413,7 +639,62 @@ class Library:
                 self.save(self.path,dict(data,scheduler=update))
                 self.data = dict(data,scheduler=update)
 
-    def schedule_command(self, command, payload, scenes=()):
+    def advance_rundown(self, clip, clip_name, now, program_targets):
+        """Consume one-shot schedules at a confirmed on-air playlist start."""
+        with self.lock:
+            data = self.read()
+            calendar = data["scheduler"]
+            if not calendar["enabled"]:
+                return
+            matches = [plan for plan in calendar["plans"] if plan.get("trigger") == "rundown"
+                       and schedule.pending(plan) and plan["clip"] in (None, clip)]
+            if not matches:
+                return
+            try:
+                active = program_targets()
+            except Exception:
+                active = None
+            update = copy.deepcopy(calendar)
+            plans = {plan["id"]:plan for plan in update["plans"]}
+            changes = []
+            claimed = set()
+            completed = []
+            for plan in sorted(matches, key=lambda row: row["clip"] is None):
+                kind, target = plan["kind"], plan["receiver"]
+                graphic = next((entry for entry in data["entries"][kind] if entry["id"] == plan["entry"]), None)
+                key = f"{kind}/{target}"
+                error = None
+                if graphic is None:
+                    error = "The saved entry is unavailable."
+                elif graphic.get("default_source") and graphic["default_source"] != {"scene": plan["scene"], "receiver": target}:
+                    error = "The entry’s default source changed."
+                elif active is None:
+                    error = "Could not verify the receivers on Program."
+                elif (plan["scene"], kind, target) not in active:
+                    error = "The selected receiver was unavailable on Program."
+                elif key in claimed:
+                    error = "Another schedule already used this receiver at the clip start."
+                else:
+                    claimed.add(key)
+                    changes.append((key, dict(items={"main":graphic}, visible=True, autoplay=False), dict(action="show")))
+                result = dict(at=now.isoformat(timespec="seconds"),clip_name=schedule.playlist_title(clip_name),error=error)
+                plans[plan["id"]]["rundown_result"] = result
+                if not error:
+                    completed.append(result)
+            update_data = dict(data, scheduler=update)
+            self.save(self.path, update_data)
+            self.data = update_data
+            try:
+                self.change_outputs(changes)
+            except OSError:
+                for result in completed:
+                    result["error"] = "Could not write the graphics output."
+                self.save(self.path, update_data)
+                raise
+            for key, *_ in changes:
+                self.previews.pop(key, None)
+
+    def schedule_command(self, command, payload, scenes=(), playlist=()):
         with self.lock:
             data = self.read()
             now = datetime.now()
@@ -426,10 +707,14 @@ class Library:
                 else:
                     records = []
                     for row in self.scheduler_view()["plans"]:
-                        if row["graphic"] is None or row["next"] is None:
+                        if row["graphic"] is None or not schedule.pending(row):
                             continue
-                        graphic = {key:value for key,value in row["graphic"].items() if key!="id"}
-                        target = {key:row[key] for key in ("kind","scene","scene_name","receiver","receiver_name","start","repeat")}
+                        graphic = {key:row["graphic"][key] for key in FIELDS[row["kind"]]}
+                        target = {key:row[key] for key in ("kind","scene","scene_name","receiver","receiver_name")}
+                        if row.get("trigger") == "rundown":
+                            target.update(trigger="rundown", clip=row["clip"])
+                        else:
+                            target.update(start=row["start"], repeat=row["repeat"])
                         records.append(dict(target,graphic=graphic))
                     if not records:
                         raise ValueError("There are no upcoming schedules to export.")
@@ -454,27 +739,34 @@ class Library:
             elif command=="schedule-import":
                 created = 0
                 imported = 0
-                signatures = {kind:{tuple(item[field] for field in FIELDS[kind]):item for item in entries[kind]}
-                              for kind in schedule.KINDS}
-                identity = ("kind","entry","scene","receiver","start","repeat")
-                scheduled = {tuple(row[field] for field in identity) for row in calendar["plans"]}
-                for index,row in enumerate(schedule.template_rows(payload),1):
+                signatures = {kind:defaultdict(list) for kind in schedule.KINDS}
+                for kind, matches in signatures.items():
+                    for item in entries[kind]:
+                        matches[tuple(item[field] for field in FIELDS[kind])].append(item)
+                scheduled = {schedule.identity(row) for row in calendar["plans"] if schedule.pending(row)}
+                for index,row in enumerate(schedule.template_rows(payload, FIELDS),1):
                     kind = row["kind"]
                     try:
                         target = schedule.target_of(kind,row,scenes,template=True)
-                        timing = schedule.timing(row,now)
+                        timing = schedule.timing(row,now,playlist)
                         graphic = make_entry(kind,row["graphic"])
+                        signature = tuple(graphic[field] for field in FIELDS[kind])
+                        matches = signatures[kind][signature]
+                        binding = {field:target[field] for field in ("scene", "receiver")}
+                        existing = next((item for item in matches if item.get("default_source") == binding), None)
+                        if existing is None:
+                            existing = next((item for item in matches if not item.get("default_source")), None)
+                        if existing is None and matches:
+                            require_default_source(matches[0], target["scene"], target["receiver"])
                     except ValueError as exc:
                         raise ValueError(f"Scheduler template row {index}. {exc}") from exc
-                    signature = tuple(graphic[field] for field in FIELDS[kind])
-                    existing = signatures[kind].get(signature)
                     if existing is None:
                         entries[kind].append(graphic)
-                        signatures[kind][signature] = graphic
+                        matches.append(graphic)
                         created += 1
                     entry = (existing or graphic)["id"]
                     record = dict(target,**timing,kind=kind,entry=entry)
-                    key = tuple(record[field] for field in identity)
+                    key = schedule.identity(record)
                     if key not in scheduled:
                         calendar["plans"].append(dict(record,id=uuid4().hex))
                         scheduled.add(key)
@@ -482,8 +774,9 @@ class Library:
                 result = dict(imported=imported,created=created)
             elif command=="schedule-save":
                 kind, entry = payload.get("kind"), payload.get("entry")
-                if kind not in schedule.KINDS or not any(row["id"]==entry for row in entries[kind]):
-                    raise ValueError("Choose a saved Name or Program entry.")
+                graphic = next((row for row in entries[kind] if row["id"]==entry), None) if kind in schedule.KINDS else None
+                if graphic is None:
+                    raise ValueError("Choose a saved Names, Program, or Custom entry.")
                 key = payload.get("id")
                 existing = next((row for row in calendar["plans"] if row["id"]==key),None)
                 if key and not existing:
@@ -491,11 +784,14 @@ class Library:
                 if existing and (kind, entry)!=(existing["kind"],existing["entry"]):
                     raise ValueError("Choose the original saved entry.")
                 target = schedule.target_of(kind,payload,scenes)
-                timing = schedule.timing(payload,now)
+                require_default_source(graphic, target["scene"], target["receiver"])
+                timing = schedule.timing(payload,now,playlist)
+                record = dict(target,**timing,kind=kind,entry=entry)
                 if existing:
-                    existing.update(target,**timing)
+                    existing.clear()
+                    existing.update(record,id=key)
                 else:
-                    calendar["plans"].append(dict(target,**timing,kind=kind,entry=entry,id=uuid4().hex))
+                    calendar["plans"].append(dict(record,id=uuid4().hex))
             elif command in ("schedule-delete","schedule-accept","schedule-dismiss"):
                 sid = payload.get("id")
                 field = "plans" if command=="schedule-delete" else "queue"
@@ -504,11 +800,16 @@ class Library:
                     raise ValueError("This scheduled change has already been handled.")
                 if command=="schedule-accept":
                     target = schedule.target_of(row["kind"],row,scenes)
+                    graphic = next((item for item in entries[row["kind"]] if item["id"] == row["entry"]), None)
+                    if graphic is None:
+                        raise ValueError("The scheduled entry is no longer available.")
+                    require_default_source(graphic, target["scene"], target["receiver"])
                     source = next(source for scene in scenes if scene["key"]==target["scene"]
                                   for source in scene["sources"] if source["key"]==target["receiver"])
                     if not source["enabled"]:
                         raise ValueError("Turn on this receiver’s visibility in OBS Sources before applying the change.")
-                    self.take(row["kind"],row["receiver"],{"action":"show"},entry=row["graphic"])
+                    snapshot = dict(row["graphic"], default_source=graphic.get("default_source")) if row["kind"] == "custom" else row["graphic"]
+                    self.take(row["kind"],row["receiver"],{"action":"show","scene":target["scene"]},entry=snapshot)
                 calendar[field].remove(row)
                 if command=="schedule-delete":
                     calendar["queue"] = [change for change in calendar["queue"] if change["plan"]!=sid]
@@ -536,7 +837,6 @@ class Library:
     def take(self, kind, target, data, *, entry=None):
         key = f"{kind}/{target}"
         with self.lock:
-            self.previews.pop(key, None)
             state = dict(self.live().get(key,dict(items={},visible=False)))
             action = data["action"]
             event = None
@@ -563,11 +863,14 @@ class Library:
                             entry = entries[0]
                         if entry is None:
                             raise ValueError("Select a saved entry to display.")
+                        require_default_source(entry, data.get("scene"), target)
                         items = entry
                 state.update(items={"main":items}, autoplay=action == "autoplay-start")
                 event = dict(action="show")
+            self.previews.pop(key, None)
             self.change_outputs([(key,state,event)])
             self.deadlines.pop(key,None)
+            return bool(state.get("autoplay"))
 
     def scene_live(self, sources):
         with self.lock:
@@ -608,8 +911,7 @@ class Library:
                 self.previews.pop(key, None)
                 return
             style = validate_style(kind, data.get("style"))
-            if self.read()["settings"]["override"]:
-                style["family"] = self.read()["settings"]["family"]
+            style = self.render_style(kind, style)
             item = data.get("item")
             items = {}
             if kind in ("clock", "date"):
@@ -654,9 +956,7 @@ class Library:
             if revision == outgoing:
                 return None
             data = self.read()
-            style = data["styles"][kind]
-            if data["settings"]["override"]:
-                style = dict(style, family=data["settings"]["family"])
+            style = self.render_style(kind, data["styles"][kind])
             state = self.live().get(key,{})
             items = state.get("items",{}) if state.get("visible") else {}
             public_items = {slot:{field:value for field,value in item.items() if field != "id"} for slot,item in items.items()}
@@ -665,6 +965,15 @@ class Library:
             if preview:
                 result["preview"] = {key:preview[key] for key in ("items","style","event")}
             return result
+
+    def render_style(self, kind, style):
+        settings = self.read()["settings"]
+        style = dict(style)
+        if settings["override"]:
+            style["family"] = settings["family"]
+        if kind == "custom":
+            style["custom_override"] = settings["custom_override"]
+        return style
 
 
 def scene_key(scene):
@@ -731,21 +1040,40 @@ def scene_sources(client, name, origin, known=None, *, nested=False):
 
 def scenes(client, origin):
     response = client.get_scene_list()
-    preferred = getattr(response,"current_preview_scene_name",None) or response.current_program_scene_name
+    preview = getattr(response,"current_preview_scene_name",None)
+    preferred = preview or response.current_program_scene_name
     targets = scene_targets(response)
     known = {}
     for scene in targets:
         scene["sources"] = scene_sources(client,scene["name"],origin,known)
-    return dict(scenes=targets,preferred=preferred,program=response.current_program_scene_name)
+    return dict(scenes=targets,preferred=preferred,preview=preview,program=response.current_program_scene_name)
 
 
-def set_up_source(client, kind, scene_id, origin, style):
-    targets = scene_targets(client.get_scene_list())
+def program_receivers(client, response, program, origin):
+    active_scenes = {program}
+    active_scenes.update(item["sourceName"] for item, _ in walk_scene_items(client, program, active_only=True)
+                         if not item.get("isGroup") and item.get("sourceType") == "OBS_SOURCE_TYPE_SCENE")
+    known = {}
+    receivers = {(scene["key"], source["kind"], source["key"])
+                 for scene in scene_targets(response) if scene["name"] in active_scenes
+                 for source in scene_sources(client, scene["name"], origin, known) if source["enabled"]}
+    return receivers if client.get_current_program_scene().current_program_scene_name == program else set()
+
+
+def set_up_source(client, kind, scene_id, origin, style, *, follow_preview=False, entry=None):
+    response = client.get_scene_list()
+    targets = scene_targets(response)
+    if follow_preview:
+        preview = getattr(response, "current_preview_scene_name", None) or response.current_program_scene_name
+        current = next((item for item in targets if item["name"] == preview), None)
+        if current is None or (scene_id is not None and current["key"] != scene_id):
+            raise ValueError("The preview scene changed. Wait for the dock to update and try again.")
+        scene_id = current["key"]
     scene = next((item for item in targets if item["key"] == scene_id),None)
     if scene is None:
         raise ValueError("That OBS scene changed. Reload the scene list and select it again.")
     existing = scene_sources(client,scene["name"],origin)
-    if kind != "names" and (current := next((item for item in existing if item["kind"] == kind
+    if kind not in MULTIPLE_RECEIVERS and (current := next((item for item in existing if item["kind"] == kind
                                               and (kind != "clock" or item["compact"])),None)):
         return dict(source=current["name"],scene=scene["name"],key=current["key"])
     taken = {item["inputName"].casefold() for item in client.get_input_list().inputs}
@@ -754,7 +1082,7 @@ def set_up_source(client, kind, scene_id, origin, style):
         taken.update(name.casefold() for name in client.get_group_list().groups)
     suffix=1
     base = source = f"Toolkit {LABELS[kind]}"
-    if kind == "names":
+    if kind in MULTIPLE_RECEIVERS:
         while f"{base} • Receiver {suffix}".casefold() in taken:
             suffix+=1
         source = f"{base} • Receiver {suffix}"
@@ -775,6 +1103,14 @@ def set_up_source(client, kind, scene_id, origin, style):
     names_count = sum(s["kind"] == "names" for s in existing) if kind == "names" else 0
     x = style["right"] if names_count % 2 else style["x"]
     y = style["y"] + names_count // 2 * 11
+    if kind == "custom":
+        count = sum(s["kind"] == kind for s in existing)
+        entry = entry or {}
+        horizontal, vertical = entry.get("horizontal"), entry.get("vertical")
+        side_x = 100 * (1 - width / canvas.base_width)
+        side_y = 100 * (1 - height / canvas.base_height)
+        x = {"left": 4, "center": side_x / 2, "right": side_x - 4}.get(horizontal, 4 if count % 2 else x)
+        y = {"top": 5, "middle": side_y / 2, "bottom": side_y - 5}.get(vertical, y + count // 2 * 11)
     try:
         client.set_scene_item_transform(scene["name"],item.scene_item_id,dict(
             positionX=max(0,min(canvas.base_width*x/100,canvas.base_width-width)),

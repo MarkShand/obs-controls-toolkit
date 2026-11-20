@@ -30,6 +30,7 @@ FILES = (
     "video-rundown/graphics.py", "video-rundown/graphics_schedule.py", "video-rundown/graphics.html",
     "video-rundown/graphics.css", "video-rundown/graphics.js",
     "video-rundown/graphics_overlay.html", "video-rundown/graphics_render.js", "video-rundown/graphics_receiver.js",
+    "video-rundown/support.js", "video-rundown/support.css",
     "video-rundown/choose_media.ps1", "video-rundown/folder_picker.cs",
     "video-rundown/README.md", "video-rundown/requirements.txt",
 )
@@ -114,7 +115,7 @@ def main():
     parser.add_argument("--wix", type=Path, required=True, help="path to wix.exe or wix.dll from WiX 6")
     parser.add_argument("--ui-extension", type=Path, required=True, help="path to WixToolset.UI.wixext.dll")
     parser.add_argument("--util-extension", type=Path, required=True, help="path to WixToolset.Util.wixext.dll")
-    parser.add_argument("--version", default="1.3.0")
+    parser.add_argument("--version", default="1.6.1")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True, help="directory for temporary build inputs")
     args = parser.parse_args()

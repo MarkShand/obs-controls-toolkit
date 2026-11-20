@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import re
 from uuid import uuid4
 
-KINDS = ("names", "programs")
+KINDS = ("names", "programs", "custom")
 REPEATS = ("once", "weekly", "monthly", "yearly")
 SCHEMA = "obs-controls-toolkit.graphics-schedule"
 MINUTE = "%Y-%m-%dT%H:%M"
@@ -74,14 +74,39 @@ def target_of(kind, data, scenes, *, template=False):
     return dict(scene=scene["key"], scene_name=scene["name"], receiver=receiver["key"], receiver_name=receiver["name"])
 
 
-def timing(data, now):
+def playlist_title(value):
+    return " ".join(value.split())[:500] or "Video"
+
+
+def pending(plan):
+    return plan.get("rundown_result") is None if plan.get("trigger") == "rundown" else plan["next"] is not None
+
+
+def identity(plan):
+    target = tuple(plan[key] for key in ("kind", "entry", "scene", "receiver"))
+    if plan.get("trigger") == "rundown":
+        return (*target, "rundown", plan["clip"])
+    return (*target, "clock", plan["start"], plan["repeat"])
+
+
+def timing(data, now, playlist=()):
+    trigger = data.get("trigger", "clock")
+    if trigger == "rundown":
+        clip = data.get("clip")
+        item = next((item for item in playlist if item["id"] == clip), None) if is_id(clip) else None
+        if clip is not None and item is None:
+            raise ValueError("Choose a video that is still in the Video Rundown playlist.")
+        return dict(trigger=trigger, clip=clip, clip_name=playlist_title(item["name"]) if item else None,
+                    next=None, rundown_result=None)
+    if trigger != "clock":
+        raise ValueError("Choose Clock or Video Rundown.")
     repeat, start = data.get("repeat"), timestamp(data.get("start"))
     if repeat not in REPEATS:
         raise ValueError("Choose Once, Weekly, Monthly, or Yearly.")
     following = next_occurrence(start,repeat,now.replace(second=0,microsecond=0))
     if following is None:
         raise ValueError("The schedule has no upcoming occurrence. Choose a future time.")
-    return dict(start=minute(start), repeat=repeat, next=minute(following))
+    return dict(trigger="clock", start=minute(start), repeat=repeat, next=minute(following))
 
 
 def clean(data, make_entry):
@@ -101,10 +126,28 @@ def clean(data, make_entry):
             record = {field:row[field] for field in ("id","entry","scene","receiver","kind")}
             record.update(scene_name=label(row.get("scene_name")),receiver_name=label(row.get("receiver_name")))
             if key == "plans":
-                if row.get("repeat") not in REPEATS:
+                trigger = row.get("trigger", "clock")
+                if trigger == "rundown":
+                    clip = row.get("clip")
+                    if clip is not None and not is_id(clip):
+                        raise ValueError("The graphics scheduler contains an invalid playlist clip.")
+                    played = row.get("rundown_result")
+                    if played is not None:
+                        if not isinstance(played, dict) or not isinstance(played.get("at"), str):
+                            raise ValueError("The graphics scheduler contains an invalid clip start.")
+                        stamp = played["at"]
+                        if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", stamp):
+                            raise ValueError("The graphics scheduler contains an invalid clip start.")
+                        datetime.fromisoformat(stamp)
+                        played = dict(at=stamp, clip_name=label(played.get("clip_name")),
+                                      error=label(played["error"]) if played.get("error") is not None else None)
+                    record.update(trigger=trigger, clip=clip, clip_name=label(row.get("clip_name")) if clip else None,
+                                  next=None, rundown_result=played)
+                elif trigger == "clock" and row.get("repeat") in REPEATS:
+                    record.update(trigger=trigger, start=minute(timestamp(row.get("start"))), repeat=row["repeat"],
+                                  next=minute(timestamp(row["next"])) if row.get("next") is not None else None)
+                else:
                     raise ValueError("The graphics scheduler contains an invalid repeat setting.")
-                record.update(start=minute(timestamp(row.get("start"))),repeat=row["repeat"],
-                              next=minute(timestamp(row["next"])) if row.get("next") is not None else None)
             else:
                 if not is_id(row.get("plan")) or not isinstance(row.get("graphic"),dict):
                     raise ValueError("The graphics approval queue contains an invalid change.")
@@ -137,22 +180,30 @@ def due_changes(schedule, entries, now, limit=100):
 
 
 def template(records):
-    return dict(schema=SCHEMA,version=1,schedules=records)
+    version = 2 if any(row.get("trigger") == "rundown" for row in records) else 1
+    return dict(schema=SCHEMA,version=version,schedules=records)
 
 
-def template_rows(data):
+def template_rows(data, fields_by_kind):
     if (not isinstance(data,dict) or set(data)!={"schema","version","schedules"} or data.get("schema")!=SCHEMA
-            or type(data.get("version")) is not int or data["version"]!=1 or not isinstance(data.get("schedules"),list)):
-        raise ValueError("Choose a Toolkit Scheduler v1 JSON template.")
+            or type(data.get("version")) is not int or data["version"] not in (1, 2) or not isinstance(data.get("schedules"),list)):
+        raise ValueError("Choose a Toolkit Scheduler JSON template.")
     if not data["schedules"] or len(data["schedules"])>5000:
         raise ValueError("Include between 1 and 5,000 schedules in the template.")
-    required = {"kind","graphic","start","repeat","scene_name","receiver_name"}
+    fields_required = {"kind","graphic","scene_name","receiver_name"}
     for index,row in enumerate(data["schedules"],1):
-        if (not isinstance(row,dict) or not required <= row.keys() or row.keys()-required-{"scene","receiver"}
+        trigger = row.get("trigger", "clock") if isinstance(row, dict) else None
+        options = {"scene", "receiver"}
+        if data["version"] == 2:
+            options.add("trigger")
+        required = fields_required | ({"clip"} if trigger == "rundown" else {"start","repeat"})
+        if (not isinstance(row,dict) or not required <= row.keys() or row.keys()-required-options
+                or trigger not in (("clock", "rundown") if data["version"] == 2 else ("clock",))
+                or (trigger == "rundown" and row["clip"] is not None and not is_id(row["clip"]))
                 or row.get("kind") not in KINDS or not isinstance(row.get("graphic"),dict)
                 or any(field in row and not is_id(row[field]) for field in ("scene","receiver"))):
             raise ValueError(f"Invalid Scheduler template row {index}.")
-        fields = {"text","description","show_description"} if row["kind"]=="names" else {"text"}
+        fields = set(fields_by_kind[row["kind"]])
         if not row["graphic"].keys() <= fields or "text" not in row["graphic"]:
             raise ValueError(f"Invalid graphic fields in Scheduler template row {index}.")
     return data["schedules"]

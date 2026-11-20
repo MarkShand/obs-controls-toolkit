@@ -9,19 +9,26 @@ nav,.row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 #tabs{flex:1;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:2px}
 #tabs::-webkit-scrollbar{display:none}
 #tabs button,.tab-arrow{flex:none;white-space:nowrap;padding:4px 7px;font-size:12px;border-radius:4px}
+#tabs .tab-dragging{opacity:.45}
 .tab-arrow{padding-inline:5px}
 button,.button,input,select,textarea{font:inherit;color:inherit}
 button,.button,select,.controller input:not([type=checkbox]),textarea{background:#242e3e;border:1px solid #46576e;border-radius:5px;padding:6px 8px}
 button,.button{white-space:nowrap;cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
 button[aria-pressed=true],.primary{border-color:#71cbb2;color:#b5f3e3}
+#autoplay-state{padding:3px 6px;border-radius:4px;color:#bfd0e2}
+#autoplay-state.running{background:#223b35;color:#b5f3e3}
 .panel{border:1px solid #353e50;border-radius:7px;padding:9px;background:#1a202a;min-width:0}
 label{display:grid;gap:3px;min-width:0}
 .scene-row label,.row input[type=search]{flex:1;min-width:110px}
 select,input[type=text],textarea{width:100%;min-width:0}
 textarea{resize:vertical}
 form,.style-grid{display:grid;gap:7px;margin:8px 0 0}
-#appearance{container-type:inline-size}
+#appearance,#entry-colors,#entry-layout,#preset-dialog{container-type:inline-size}
+.scene-row strong,#receiver-scene{min-width:0;overflow-wrap:anywhere}
+.scene-row strong{flex:1 1 100%}
+#entry-source label{margin:7px 0 4px}
+#default-source-status small{color:#bfd1e3;overflow-wrap:anywhere}
 .appearance-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .controller .appearance-header h2{margin:0}
 #style-fields{display:grid;gap:6px}
@@ -32,6 +39,12 @@ form,.style-grid{display:grid;gap:7px;margin:8px 0 0}
 .style-grid input[type=checkbox]{width:auto}
 @container (min-width: 460px){.style-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .check{display:flex;align-items:center;gap:5px}
+.color-field{display:grid;gap:4px;min-width:0;align-content:start}
+.color-controls{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.controller .color-controls input[type=color]{padding:2px;width:32px;min-width:32px;height:26px;cursor:pointer}
+.color-controls button{padding:4px 6px;font-size:11px}
+.color-controls output{font-family:monospace;color:#bfd1e3}
+.clipboard-field{position:fixed;top:0;left:-9999px}
 .button{position:relative;overflow:hidden}
 .button input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
 #action-toast{position:fixed;z-index:5;bottom:14px;left:50%;transform:translateX(-50%);width:max-content;
@@ -40,8 +53,15 @@ form,.style-grid{display:grid;gap:7px;margin:8px 0 0}
 #action-toast[data-error=true]{border-color:#aa696d;background:#41282f;color:#ffe1e2}
 #scene-preview{margin-block:7px}
 #entry-schedule,#schedules{margin-top:9px}
-.schedule-row{padding:6px 0;border-bottom:1px solid #353e50}
+.scheduler-filters,.schedule-fields{display:grid;gap:6px}
+.scheduler-filters{grid-template-columns:repeat(auto-fit,minmax(min(100%,145px),1fr));margin-top:10px}
+.schedule-search{grid-column:1/-1}
+.schedule-group+.schedule-group{margin-top:7px}
+.schedule-group summary{font-weight:600}
+.schedule-row{padding:6px 0;border-bottom:1px solid #353e50;overflow-wrap:anywhere}
+.schedule-row:last-child{border-bottom:0}
 .schedule-row small{display:block;color:#bfd0e2}
+.schedule-row .schedule-warning{color:#ffbcbd}
 .schedule-row .row{margin-top:4px}
 #schedule-prompt{position:fixed;z-index:4;inset:auto 12px 12px;display:flex;align-items:center;gap:6px;
     max-width:520px;margin:auto;padding:8px;background:#202631;border:1px solid #4d9c88;border-radius:8px;
@@ -67,10 +87,16 @@ details summary{cursor:pointer}
 .receiver .graphic-stage{width:100vw;height:100vh}
 .graphic{position:absolute;overflow:hidden;line-height:1.12;display:flex;flex-direction:column}
 .graphic-content{flex:none;min-width:0;overflow:hidden}
+.graphic-band-title{display:flex;flex:1 0 auto;flex-direction:column}
+.graphic .description-band{flex:none;min-width:0;overflow:hidden}
 .graphic .title,.graphic .subtitle{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .graphic .title{-webkit-line-clamp:var(--lines,none)}
 .graphic .subtitle{-webkit-line-clamp:1;margin-top:.25em}
 .graphic .subtitle:empty{display:none}
+.graphic .description-band .subtitle{margin-top:0}
+.graphic .subtitle-background{width:max-content;max-width:100%;padding-inline:.25em}
+.graphic .subtitle-background[data-align=center]{margin-inline:auto}
+.graphic .subtitle-background[data-align=right]{margin-inline-start:auto}
 .graphic .single{white-space:nowrap;display:block;text-overflow:ellipsis}
 .graphic .crawl{display:flex;width:max-content;white-space:nowrap;animation:graphics-crawl var(--duration) linear infinite;will-change:transform}
 .graphic .crawl .crawl-unit,.graphic .crawl .crawl-separator{display:flex;align-items:center;flex:none}
@@ -109,3 +135,31 @@ details summary{cursor:pointer}
 .dialog-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:6px}
 .dialog-actions button{padding:7px 12px;border-radius:9px}
 #confirm-action{background:#30554d;border-color:#5f9f91}
+
+#settings{display:grid;gap:8px}
+#about .style-section+.style-section{margin-top:8px}
+#about h3{font-size:13px;margin:0}
+#about p{line-height:1.45;margin:6px 0 9px}
+#settings .style-section>label{margin-top:8px}
+.settings-actions,.batch-row-actions{display:flex;flex-wrap:wrap;align-items:stretch;gap:6px;margin-top:7px}
+.settings-actions>*{flex:1 1 max-content;text-align:center}
+.settings-actions .button{display:grid;place-items:center}
+#csv-drop{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;padding:8px;border:1px dashed #596f8a;border-radius:5px}
+#csv-drop.drag-over{background:#223b35;border-color:#71cbb2}
+#csv-drop span,#batch-list small{color:#bfd1e3}
+#batch-list{list-style:none;margin:0;padding:0}
+#batch-list li{display:grid;gap:3px;padding:8px 0;border-bottom:1px solid #353e50;overflow-wrap:anywhere}
+.batch-row-actions{margin-top:2px}
+.batch-row-actions select{flex:1 1 105px;width:auto}
+#mapping-fields{display:grid;gap:7px}
+.controller #csv-dialog,.controller #preset-dialog{width:min(520px,calc(100% - 24px))}
+.csv-table{overflow:auto;max-height:170px;margin-top:5px}
+.csv-table table{border-collapse:collapse;text-align:left;font-size:12px}
+.csv-table th,.csv-table td{min-width:max-content;padding:5px 6px;border:1px solid #485975}
+.csv-table th{background:#283447;white-space:nowrap}
+.csv-table td{min-width:74px}
+#csv-error,#preset-status{overflow-wrap:anywhere;margin:0}
+#csv-error,#preset-status[data-error=true],#batch-list [data-error=true]{color:#ffbcbd}
+#preset-sample{justify-self:start;display:grid;gap:4px;padding:8px;border-radius:4px}
+#preset-sample span{padding:2px 4px}
+#preset-dialog .dialog-actions{flex-wrap:wrap}

@@ -26,8 +26,20 @@ function formatGraphicsClock(date, timeFormat, dateFormat) {
     return {time, date:graphicsDateReaders[dateFormat]?.format(date) || dates[dateFormat] || dates.ymd};
 }
 
-const graphicsSizes = {names:[760,196],headlines:[1650,240],programs:[1040,160],crawlers:[1920,128],clock:[480,134],date:[630,134]};
+const graphicsSizes = {names:[760,196],headlines:[1650,240],programs:[1040,160],crawlers:[1920,128],clock:[480,134],date:[630,134],custom:[640,176]};
+const graphicsColorFields = ["foreground","secondary","background","description_background"];
 const graphicsCaseOptions = {original:"As Entered",upper:"UPPERCASE",lower:"lowercase",title:"Title Case"};
+
+function graphicsItemStyle(kind, style, item) {
+    if (kind !== "custom") return style;
+    const overrides = ["horizontal","vertical","align","animation","direction","duration"];
+    const settings = Object.fromEntries(overrides.filter(field=>item[field]!=null).map(field=>[field,item[field]]));
+    const colors = style.custom_override ? {} :
+        Object.fromEntries(graphicsColorFields.filter(field=>item[field]).map(field=>[field,item[field]]));
+    if (colors.background) colors.transparent=false;
+    if (colors.description_background) colors.description_transparent=false;
+    return {...style,...settings,...colors};
+}
 
 function graphicsTextCase(value, mode) {
     if (mode === "upper") return value.toLocaleUpperCase();
@@ -113,11 +125,12 @@ function graphicsRenderer(stage) {
         clearInterval(untilNextClock);
         stage.replaceChildren();
         if (!current || !stage.clientWidth) return;
-        const {kind,style,items,compact}=current;
+        const {kind,items,compact}=current;
         const reference=compact ? graphicsSizes[kind][0] : 1920;
         const ratio=stage.clientWidth/reference;
         const dateOnly=kind === "date";
         for (const [slot,item] of Object.entries(items)) {
+            const style=graphicsItemStyle(kind,current.style,item);
             const legacyClock=kind === "clock" && !compact;
             if (legacyClock && !style.show_time && !style.show_date) continue;
             const box=document.createElement("div"), content=document.createElement("div");
@@ -126,8 +139,10 @@ function graphicsRenderer(stage) {
             const width=style.manual_width ?? (compact ? 100 : legacyWidth);
             if (style.background_size === "manual" && !width) continue;
             const opacity=Math.round((style.opacity??100)*255/100).toString(16).padStart(2,"0");
+            const background=style.transparent ? "transparent" : style.background+opacity;
             const corners=style.corners === "individual" ? [style.radius_tl,style.radius_tr,style.radius_br,style.radius_bl] : [style.radius];
             const filling=style.background_size === "fill", fitting=style.background_size === "fit";
+            const band=style.description_layout==="band" && item.show_description && item.description?.trim();
             const [top,right,bottom,left]=["top","right","bottom","left"].map(side=>
                 (style.padding_mode==="sides" ? style["padding_"+side] : style.padding)*ratio);
             const fixedHeight=kind==="headlines"
@@ -135,29 +150,48 @@ function graphicsRenderer(stage) {
                 : null;
             const areaHeight=filling ? stage.clientHeight : fixedHeight ?? stage.clientHeight;
             const areaWidth=filling || fitting ? stage.clientWidth : stage.clientWidth*width/100;
-            const scaleY=Math.min(1, .9*areaHeight/Math.max(top+bottom,1));
+            const scaleY=Math.min(1, (band ? .65 : .9)*areaHeight/Math.max((top+bottom)*(band ? 1.5 : 1),1));
             const scaleX=Math.min(1, .9*areaWidth/Math.max(left+right,1));
             const pad=[top*scaleY,right*scaleX,bottom*scaleY,left*scaleX];
+            const bandPad=pad.map((value,index)=>index%2 ? value : value/2);
+            const textAlignment={top:"flex-start",middle:"center",bottom:"flex-end"}[style.text_vertical];
             Object.assign(box.style,{left:"0",top:"0",width:filling ? "100%" : fitting ? "max-content" : width+"%",
                 height:filling ? "100%" : fixedHeight===null ? "auto" : fixedHeight+"px",maxWidth:"100%",maxHeight:"100%",
-                color:style.foreground,background:style.transparent ? "transparent" : style.background+opacity,
+                color:style.foreground,background:band ? "transparent" : background,
                 borderRadius:corners.map(radius=>(radius??style.radius)*ratio+"px").join(" "),
-                padding:pad.map(value=>value+"px").join(" "),
-                justifyContent:{top:"flex-start",middle:"center",bottom:"flex-end"}[style.text_vertical],
+                padding:band ? "0" : pad.map(value=>value+"px").join(" "),
+                justifyContent:band ? "flex-end" : textAlignment,
                 textAlign:style.align,fontFamily:JSON.stringify(style.family)+", Arial, sans-serif",fontSize:style.font*ratio+"px",
                 fontWeight:style.bold?"700":"400"});
             const lines = kind === "headlines" ? style.lines : kind === "clock" ? 1 : Infinity;
             if (Number.isFinite(lines)) box.style.setProperty("--lines",lines);
             stage.append(box);
             const position = () => positionBox(box,style,compact,slot);
-            const available = Math.max(1,areaHeight-pad[0]-pad[2]);
+            const available = Math.max(1,areaHeight-pad[0]-pad[2]-(band ? bandPad[0]+bandPad[2] : 0));
             if (kind === "crawlers") {
                 box.style.fontSize=Math.min(style.font*ratio,available/1.12)+"px";
                 makeCrawler(content,item,style,ratio,fitting ? step=>{box.style.width=step+pad[1]+pad[3]+"px"; position();} : null);
             } else {
                 const title=document.createElement("div"), subtitle=document.createElement("div");
                 title.className="title"; subtitle.className="subtitle"; subtitle.style.color=style.secondary;
-                content.append(title,subtitle);
+                content.append(title);
+                if (band) {
+                    const strip=document.createElement("div");
+                    strip.className="description-band";
+                    strip.style.padding=bandPad.map(value=>value+"px").join(" ");
+                    if (!style.description_transparent) strip.style.backgroundColor=style.description_background;
+                    content.classList.add("graphic-band-title");
+                    Object.assign(content.style,{background,padding:pad.map(value=>value+"px").join(" "),justifyContent:textAlignment});
+                    strip.append(subtitle);
+                    box.append(strip);
+                } else {
+                    if (style.description_background && !style.description_transparent) {
+                        subtitle.classList.add("subtitle-background");
+                        subtitle.dataset.align=style.align;
+                        subtitle.style.backgroundColor=style.description_background;
+                    }
+                    content.append(subtitle);
+                }
                 if (kind === "clock" || dateOnly) {
                     if (!dateOnly) title.classList.add("single");
                     if (legacyClock) title.hidden=!style.show_time;
@@ -178,10 +212,15 @@ function graphicsRenderer(stage) {
                 } else {
                     title.textContent=graphicsTextCase(item.text,style.text_case);
                     if (item.show_description) subtitle.textContent=graphicsTextCase(item.description || "",style.text_case);
-                    const subtitleSize=subtitle.textContent ? Math.min((style.description_font ?? style.font*.54)*ratio,available*.6) : 0;
+                    const subtitleSize=subtitle.textContent ? Math.min((style.description_font ?? style.font*.54)*ratio,available*(band ? .4 : .6)) : 0;
                     if (subtitleSize) subtitle.style.fontSize=subtitleSize+"px";
-                    fit(title,style.font*ratio,lines,available-subtitleSize*1.4);
-                    if (subtitleSize) fit(subtitle,subtitleSize,1,Math.max(1,available-title.offsetHeight-subtitleSize*.25));
+                    if (band) {
+                        fit(subtitle,subtitleSize,1,available*.5);
+                        fit(title,style.font*ratio,lines,Math.max(1,available-subtitle.offsetHeight));
+                    } else {
+                        fit(title,style.font*ratio,lines,available-subtitleSize*1.4);
+                        if (subtitleSize) fit(subtitle,subtitleSize,1,Math.max(1,available-title.offsetHeight-subtitleSize*.25));
+                    }
                 }
             }
             position();
@@ -195,7 +234,8 @@ function graphicsRenderer(stage) {
         const ticket=++generation;
         animations.forEach(animation=>animation.cancel()); animations=[];
         signature=next;
-        const style=frame?.style || current?.style;
+        const animatedFrame=action==="hide" ? current : frame;
+        const style=animatedFrame && graphicsItemStyle(animatedFrame.kind,animatedFrame.style,animatedFrame.items.main || {});
         current=frame;
         if (action === "hide" && style?.animation !== "cut" && stage.children.length) {
             animations=[...stage.children].map(node=>node.animate(graphicFrames(stage,node,style,action),{duration:style.duration,fill:"both",easing:"ease-in-out"}));

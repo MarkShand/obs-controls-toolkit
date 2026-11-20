@@ -1,0 +1,7 @@
+.toolkit-support{position:fixed;z-index:3;right:10px;bottom:42px;display:flex;flex-wrap:wrap;align-items:center;
+    gap:3px;max-width:calc(100% - 20px);padding:3px;border:1px solid #536175;border-radius:7px;
+    background:#1a202a;color:#dce5ef;box-shadow:0 3px 10px #080b1270;font:11px system-ui,sans-serif}
+.toolkit-support[hidden],body:has(dialog[open]) .toolkit-support{display:none}
+body:has(#schedule-prompt:not([hidden])) .toolkit-support{bottom:132px}
+.toolkit-support button{padding:3px 6px;font:inherit;border-radius:4px}
+.toolkit-support small{flex-basis:100%;color:#ffbcbd;padding:2px 4px}

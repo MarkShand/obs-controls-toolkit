@@ -6,6 +6,7 @@ __pycache__/
 # Rundown media, state, and backups
 /video-rundown/video-cache/
 /video-rundown/backups/
+/video-rundown/support-reminder.json
 toolkit-setup-backups/
 
 # Generated runtime files and the compiled macOS helper

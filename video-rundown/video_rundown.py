@@ -25,6 +25,7 @@ import math
 import threading
 import time
 import uuid
+import webbrowser
 from urllib.parse import parse_qs
 
 import obsws_python
@@ -84,6 +85,7 @@ state = dict(ready=False, program=False, current=None, auto=False, auto_cut="off
              preview=None, preview_has_rundown=False, return_ready=False, status="Idle", cursor=0, duration=0, error="", air_revision=0)
 client = None
 armed = False
+clip_start_pending = False
 started = 0.0
 sampled_at = 0.0
 held_path = None
@@ -102,6 +104,31 @@ GRAPHICS_ASSETS = {
     "/graphics-render.js": ("graphics_render.js", "text/javascript"),
     "/graphics-receiver.js": ("graphics_receiver.js", "text/javascript"),
 }
+SUPPORT_URL = "https://ko-fi.com/bitwraith21"
+PROJECT_URL = "https://github.com/bitwraith21/obs-controls-toolkit"
+PROJECT_LINKS = {"github": PROJECT_URL, "issues": PROJECT_URL + "/issues", "support": SUPPORT_URL}
+
+
+def support_reminder(action=None, shown_slot=None, *, now=None):
+    """Use the OBS computer’s local time and share dismissals across its docks."""
+    now = now or datetime.now()
+    hour = next((hour for hour in (10, 14) if hour <= now.hour < hour + 2), None)
+    if hour is None:
+        return {"slot": None}
+    slot = f"{now.date()}/{hour}"
+    if action == "open" and shown_slot == slot and not webbrowser.open(SUPPORT_URL, new=2):
+        raise ValueError("Could not open your default browser.")
+    path = DATA / "support-reminder.json"
+    with LOCK:
+        try:
+            dismissed = json.loads(path.read_bytes()).get("dismissed")
+        except (FileNotFoundError, ValueError, AttributeError):
+            dismissed = None
+        if action in ("open", "dismiss") and shown_slot == slot and dismissed != slot:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            save_json(path, {"dismissed": slot})
+            dismissed = slot
+        return {"slot": slot if dismissed != slot else None}
 
 
 def save_settings_files(updates):
@@ -225,6 +252,11 @@ def public_clip(clip):
                 missing=status == "missing", media_status=status,
                 unsupported=item.get("unsupported") if status == "unsupported" else None,
                 linked=bool(item.get("linked")))
+
+
+def scheduler_playlist():
+    return [dict(id=clip["id"], name=clip_title(clip))
+            for clip in QUEUE if not clip.get("marker") and not clip.get("played")]
 
 
 def public_library_clip(item, *, show_path=False, roots=()):
@@ -1822,7 +1854,7 @@ def take_rundown_off_air(c, media):
 
 def play(clip):
     item = require_playable(clip)
-    global armed, started, sampled_at, held_path
+    global armed, started, sampled_at, held_path, clip_start_pending
     c = obs()
     if not scene_has_rundown(c, c.get_current_program_scene().current_program_scene_name):
         raise ValueError("Put a scene containing an enabled Rundown Player on Program before playing a clip.")
@@ -1848,6 +1880,7 @@ def play(clip):
         c.trigger_media_input_action(SOURCE, "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
     log_playback("Replaced")
     armed = False
+    clip_start_pending = not continuing and any(row["id"] == clip["id"] for row in QUEUE)
     held_path = None
     started = sampled_at = time.monotonic()
     state.update(program=True, return_ready=False, handoff="", current=clip["id"], status="Loading",
@@ -1974,7 +2007,7 @@ def start_on_program(previous, current):
 
 
 def poll():
-    global armed, client, sampled_at
+    global armed, client, sampled_at, clip_start_pending
     previous_program = None
     previous_preview_has_rundown = None
     previous_graphics_program = None
@@ -2029,6 +2062,11 @@ def poll():
                     if state["duration"] and not state.get("schedule_anchor"):
                         state["schedule_anchor"] = time.time() + (state["duration"] - state["cursor"]) / 1000
                     clip = find_clip(state["current"])
+                    if clip_start_pending:
+                        clip_start_pending = False
+                        with suppress(OSError, ValueError):
+                            graphics_library.advance_rundown(clip["id"], clip_title(clip), datetime.now(),
+                                lambda: graphics.program_receivers(c, scenes, program_name, ORIGIN))
                     media_id = clip.get("media_id", clip["id"])
                     if state["duration"] and LIBRARY.get(media_id, {}).get("duration_ms") != state["duration"]:
                         LIBRARY[media_id]["duration_ms"] = state["duration"]
@@ -2467,6 +2505,17 @@ class Handler(PreviewHandler):
             self.reply(200, (ROOT / "dock.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN), "text/html")
         elif self.path == "/clock":
             self.reply(200, (ROOT / "clock.html").read_text(encoding="utf-8"), "text/html")
+        elif self.path in ("/support.js", "/support.css"):
+            mime = "text/javascript" if self.path.endswith(".js") else "text/css"
+            self.reply(200, (ROOT / self.path[1:]).read_text(encoding="utf-8"), mime)
+        elif self.path == "/support-reminder":
+            if not hmac.compare_digest(self.headers.get("X-Rundown", ""), TOKEN):
+                self.reply(403, "{}")
+            else:
+                try:
+                    self.reply(200, json.dumps(support_reminder()))
+                except OSError:
+                    self.reply(503, "{}")
         elif self.path.startswith("/graphics"):
             self.serve_graphics()
         elif self.path == "/preview":
@@ -2566,11 +2615,21 @@ class Handler(PreviewHandler):
                 except Exception:
                     self.reply(503, json.dumps({"error": "Connect to OBS WebSocket from Tools → WebSocket Server Settings, then reload scenes."}))
                     return
+                receivers = [source for scene in result["scenes"] for source in scene["sources"] if source["kind"] == "headlines"]
+                if receivers:
+                    try:
+                        playing = graphics_library.autoplay_receivers()
+                    except (OSError, ValueError):
+                        playing = None
+                    for source in receivers:
+                        source["autoplay"] = source["key"] in playing if playing is not None else None
             elif path == "/graphics-fonts":
                 result = dict(fonts=graphics.installed_fonts())
             elif path == "/graphics-scheduler":
                 try:
-                    result = graphics_library.scheduler_view()
+                    with LOCK:
+                        result = graphics_library.scheduler_view()
+                        result["playlist"] = scheduler_playlist()
                 except (OSError, ValueError):
                     self.reply(503, json.dumps({"error":"Could not read the graphics scheduler data."}))
                     return
@@ -2591,12 +2650,15 @@ class Handler(PreviewHandler):
     def change_graphics(self, length):
         path, _, query = self.path.partition("?")
         if path.startswith("/graphics-import/"):
-            if not 0 < length <= graphics.CSV_LIMIT:
+            kind = path.removeprefix("/graphics-import/")
+            limit = graphics.CSV_LIMIT * 4 // 3 + 1024 * 1024 if kind == "batch" else graphics.CSV_LIMIT
+            if not (length == 0 and kind == "preview") and not 0 < length <= limit:
                 raise ValueError("Choose a graphics file up to 16 MB.")
             payload = self.rfile.read(length)
             if len(payload) != length:
                 raise ValueError("Select a complete graphics file.")
-            kind = path.removeprefix("/graphics-import/")
+            if kind == "batch":
+                return graphics_library.import_batch(graphics.csv_batch(json.loads(payload)))
             if kind == "json":
                 return graphics_library.import_json(payload)
             if kind == "schedule":
@@ -2605,7 +2667,9 @@ class Handler(PreviewHandler):
             if not isinstance(options, dict):
                 raise ValueError("Choose valid import options.")
             if kind == "preview":
-                return graphics.csv_preview(payload, options.get("header") is True)
+                return graphics.csv_preview(payload, options.get("header") is True, options.get("kind"))
+            if kind == "validate" and options.get("kind") in graphics.LIBRARIES:
+                return dict(imported=len(graphics.csv_entries(options["kind"], payload, options)))
             if kind in graphics.LIBRARIES:
                 return graphics_library.save_edit(kind,"import",graphics.csv_entries(kind,payload,options))
             raise ValueError("Choose a CSV library or JSON import.")
@@ -2626,7 +2690,7 @@ class Handler(PreviewHandler):
             if data.get("reveal") is True:
                 result["revealed"] = reveal_graphics_export(Path(result["path"]))
             return result
-        if kind == "settings" and command == "settings":
+        if kind == "settings" and command in ("settings", "preset"):
             return graphics_library.save_edit(kind,command,data)
         if kind not in graphics.LABELS:
             raise ValueError("Choose a graphics tab.")
@@ -2648,21 +2712,27 @@ class Handler(PreviewHandler):
                 with LOCK:
                     client = obs()
                     if command == "setup":
-                        return graphics.set_up_source(client, kind, scene, ORIGIN, graphics_library.editor(kind)["style"])
+                        editor = graphics_library.editor(kind)
+                        entry = next((item for item in editor["entries"] if item["id"] == data.get("id")), None) if kind == "custom" else None
+                        return graphics.set_up_source(client, kind, scene, ORIGIN, editor["style"],
+                                                      follow_preview=data.get("follow_preview") is True, entry=entry)
                     source = graphics_target(client,kind,scene,target,preview=command=="preview")
                     if command=="preview":
                         graphics_library.preview(kind,target,data)
                         return dict(receiver=source["name"])
-                    graphics_library.take(kind,target,data)
-                    return dict(receiver=source["name"])
+                    autoplay = graphics_library.take(kind,target,data)
+                    result = dict(receiver=source["name"])
+                    if kind == "headlines":
+                        result["autoplay"] = autoplay
+                    return result
             except ValueError:
                 raise
             except Exception as exc:
                 if isinstance(exc, obsws_python.error.OBSSDKRequestError):
                     raise ValueError(f"OBS rejected {exc.req_name} (code {exc.code}). Check that Browser Source is available.") from exc
                 raise ValueError("Connect to OBS WebSocket from Tools → WebSocket Server Settings, then retry.") from exc
-        graphics_library.take(kind, target, data)
-        return {}
+        autoplay = graphics_library.take(kind, target, data)
+        return dict(autoplay=autoplay) if kind == "headlines" else {}
 
     def graphics_schedule(self, command, data):
         needs_scenes = command in ("schedule-save","schedule-import","schedule-accept","schedule-sample")
@@ -2675,7 +2745,7 @@ class Handler(PreviewHandler):
                     if command != "schedule-sample":
                         raise ValueError("Connect to OBS WebSocket to verify Scheduler targets.") from exc
             try:
-                result = graphics_library.schedule_command(command,data,scenes)
+                result = graphics_library.schedule_command(command,data,scenes,scheduler_playlist())
             except OSError as exc:
                 raise ValueError("The Scheduler data or export folder could not be written.") from exc
         if "path" in result and data.get("reveal") is True:
@@ -2695,6 +2765,21 @@ class Handler(PreviewHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if self.path.startswith(("/graphics-command/", "/graphics-import/")):
                 self.reply(200, json.dumps(self.change_graphics(length)))
+                return
+            elif self.path == "/support-reminder" and 0 < length <= 128:
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict) or data.get("action") not in ("dismiss", "open"):
+                    raise ValueError("Choose a valid support action.")
+                self.reply(200, json.dumps(support_reminder(data["action"], data.get("slot"))))
+                return
+            elif self.path == "/project-link" and 0 < length <= 128:
+                data = json.loads(self.rfile.read(length))
+                link = data.get("link") if isinstance(data, dict) else None
+                if not isinstance(link, str) or link not in PROJECT_LINKS:
+                    raise ValueError("Choose a project link.")
+                if not webbrowser.open(PROJECT_LINKS[link], new=2):
+                    raise ValueError("Could not open your default browser.")
+                self.reply(200, "{}")
                 return
             elif self.path in {"/lan-monitor", "/cue-clock"} and 0 < length <= 2048:
                 data = json.loads(self.rfile.read(length))
