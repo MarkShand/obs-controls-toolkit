@@ -1,9 +1,11 @@
 """Local OBS video rundown. Install obsws-python before launching."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote
 import base64
 import csv
+import errno
+import shutil
 import io
 from datetime import datetime
 import mimetypes
@@ -13,7 +15,11 @@ import json
 import os
 import secrets
 import sqlite3
-from contextlib import closing
+import subprocess
+import sys
+from stat import IO_REPARSE_TAG_MOUNT_POINT, S_ISREG
+from contextlib import closing, suppress
+from collections import Counter, defaultdict
 import math
 import threading
 import time
@@ -28,8 +34,15 @@ HOST = "127.0.0.1:46643"
 ORIGIN = "http://" + HOST
 SCENE = "Video Rundown"
 SOURCE = "Rundown Player"
+RUNDOWN_OWNER = "obs_controls_toolkit_rundown"
 FORMATS = {".mp4", ".ts", ".mov", ".flv", ".mkv", ".avi", ".gif", ".webm"}
-METADATA_VERSION = 2
+DEMUXERS = {".mp4": "mov", ".mov": "mov", ".ts": "mpegts", ".flv": "flv",
+            ".mkv": "matroska", ".webm": "matroska", ".avi": "avi", ".gif": "gif"}
+OTHER_VIDEO_FORMATS = {".3gp", ".asf", ".divx", ".dv", ".f4v", ".m2t", ".m2ts", ".m4v",
+                       ".mpeg", ".mpg", ".mts", ".mxf", ".ogv", ".rm", ".rmvb", ".vob", ".wmv"}
+METADATA_VERSION = 3
+FOLDER_PICKER = threading.Lock()
+FOLDER_OPERATION = threading.Lock()
 TOKEN = secrets.token_hex(32)
 LOCK = threading.RLock()
 QUEUE = []
@@ -40,7 +53,18 @@ LIBRARY_FILE = CACHE / "library.json"
 QUEUE_FILE = CACHE / "queue.json"
 SETTINGS_FILE = CACHE / "settings.json"
 CATEGORIES_FILE = CACHE / "categories.json"
+FOLDERS_FILE = CACHE / "folders.json"
+FOLDER_RENAME_FILE = CACHE / "folder-rename.json"
+FILE_CHANGE_FILE = CACHE / "file-change.json"
+FAVORITES_FILE = CACHE / "favorites.json"
 CATEGORIES = []
+FOLDERS = []
+FAVORITES = []
+FILE_OPERATION = {}
+folder_generation = 0
+RENAME_SUGGESTIONS = {}
+WATCHED_FOLDERS = {}
+FAVORITE_TREES = {}
 state = dict(ready=False, program=False, current=None, auto=False, auto_cut="off", preview=None, return_ready=False, status="Idle", cursor=0, duration=0, error="")
 client = None
 armed = False
@@ -50,8 +74,27 @@ sampled_at = 0.0
 
 def save_json(path, data):
     temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(data), encoding="utf-8")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(path)
+
+
+def save_settings_files(updates):
+    originals = {file: file.read_bytes() if file.exists() else None for file, _ in updates}
+    saved = []
+    try:
+        for file, data in updates:
+            save_json(file, data)
+            saved.append(file)
+    except OSError:
+        for file in reversed(saved):
+            original = originals[file]
+            if original is None:
+                file.unlink(missing_ok=True)
+            else:
+                temporary = file.with_suffix(".tmp")
+                temporary.write_bytes(original)
+                temporary.replace(file)
+        raise
 
 
 def register_categories(names):
@@ -65,7 +108,10 @@ def register_categories(names):
 
 
 def save_queue():
-    save_json(QUEUE_FILE, QUEUE)
+    save_json(QUEUE_FILE, [
+        clip if clip.get("marker") else dict(clip, path=media_item(clip)["path"])
+        for clip in QUEUE
+    ])
 
 
 def find_clip(clip_id):
@@ -79,8 +125,8 @@ def cue(clip_id):
 
 
 def clip_title(clip):
-    media = LIBRARY.get(clip.get("media_id", clip["id"]), {})
-    return media.get("title") or clip.get("title") or clip["name"]
+    media = media_item(clip)
+    return media.get("title") or media["name"]
 
 
 def restore_preferences_and_history():
@@ -105,60 +151,1094 @@ def log_playback(result):
     state["air_started"] = None
 
 
+def media_item(clip):
+    return LIBRARY.get(clip.get("media_id", clip["id"]), clip)
+
+
+def file_stamp(path):
+    try:
+        stat = path.stat()
+        return [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino] if S_ISREG(stat.st_mode) else None
+    except OSError:
+        return None
+
+
+def media_status(item):
+    if FILE_OPERATION.get("status") == "running" and FILE_OPERATION.get("clip") == item["id"]:
+        return "organizing"
+    stamp = file_stamp(Path(item["path"]))
+    if stamp is None:
+        return "missing"
+    if item.get("metadata_version") != METADATA_VERSION or item.get("verified_file") != stamp:
+        return "checking"
+    return "unsupported" if item.get("unsupported") else "ready"
+
+
+def require_playable(clip):
+    item = media_item(clip)
+    status = media_status(item)
+    if status != "ready":
+        raise ValueError({
+            "missing": "This video is missing. Reconnect it in Backups.",
+            "checking": "This video is awaiting verification.",
+            "organizing": "Wait for the file operation to finish.",
+            "unsupported": "Unsupported video. " + (item.get("unsupported") or ""),
+        }[status])
+    return item
+
+
 def public_clip(clip):
     if clip.get("marker"):
         return dict(id=clip["id"], name="Stop & Re-cue", marker=True)
-    return dict(id=clip["id"], name=clip_title(clip),
-                media_id=clip.get("media_id", clip["id"]),
-                duration_ms=LIBRARY.get(clip.get("media_id", clip["id"]), {}).get("duration_ms", 0),
-                played=clip.get("played", False))
+    item = media_item(clip)
+    status = media_status(item)
+    return dict(id=clip["id"], name=clip_title(clip), media_id=item["id"],
+                duration_ms=item.get("duration_ms", 0), played=clip.get("played", False),
+                missing=status == "missing", media_status=status,
+                unsupported=item.get("unsupported") if status == "unsupported" else None,
+                linked=bool(item.get("linked")))
 
 
-def scan_library_metadata():
+def public_library_clip(item, *, show_path=False, roots=()):
+    clip = dict(public_clip(item), original_name=item["name"], metadata={
+                    "format": Path(item["name"]).suffix[1:].upper(),
+                    **(item.get("metadata") or {}),
+                })
+    if show_path:
+        clip["file_path"] = item["path"]
+        if item.get("linked"):
+            parent = Path(item["path"]).parent
+            clip["folder_paths"] = {str(root): parent.relative_to(root).parts for root in roots
+                                    if parent.is_relative_to(root)}
+    return clip
+
+
+def verify_video(item, stamp):
     import av
 
-    attempted = set()
-    while True:
-        with LOCK:
-            item = next((clip for clip in LIBRARY.values()
-                         if not clip.get("removed") and clip["id"] not in attempted
-                         and clip.get("metadata_version") != METADATA_VERSION and Path(clip["path"]).is_file()), None)
-        if item is None:
-            time.sleep(1)
-            continue
-        attempted.add(item["id"])
-        path = Path(item["path"])
-        metadata = {"format": path.suffix[1:].upper()}
-        duration_ms = 0
-        try:
-            stat = path.stat()
-            metadata["size_bytes"] = stat.st_size
-            metadata["modified_at"] = item.get("source_modified_at", stat.st_mtime)
-            created_at = getattr(stat, "st_birthtime", None)
-            if created_at is not None:
-                metadata["created_at"] = created_at
-            metadata["cached_modified"] = "source_modified_at" not in item
-            with av.open(str(path), timeout=5) as media:
+    path = Path(item["path"])
+    metadata = {"format": path.suffix[1:].upper()}
+    duration_ms = 0
+    unsupported = None
+    try:
+        stat = path.stat()
+        metadata.update(size_bytes=stat.st_size, modified_at=item.get("source_modified_at", stat.st_mtime),
+                        cached_modified=not item.get("linked") and "source_modified_at" not in item)
+        if (created_at := getattr(stat, "st_birthtime", None)) is not None:
+            metadata["created_at"] = created_at
+        demuxer = DEMUXERS.get(path.suffix.lower())
+        if not demuxer:
+            unsupported = "File extension is outside the supported formats."
+        else:
+            with path.open("rb") as source, av.open(source, format=demuxer, timeout=5,
+                                                     options={"protocol_whitelist": ""}) as media:
                 video = next(iter(media.streams.video), None)
-                if video:
+                if video is None or next(media.decode(video), None) is None:
+                    unsupported = "No decodable video stream was found."
+                else:
                     metadata.update(width=video.width, height=video.height,
                                     codec=video.codec_context.name)
                     if video.average_rate:
                         metadata["fps"] = round(float(video.average_rate), 3)
-                if media.duration and media.duration > 0:
-                    duration_ms = round(media.duration * 1000 / av.time_base)
-        except (OSError, av.error.FFmpegError):
-            pass
+                    if media.duration and media.duration > 0:
+                        duration_ms = round(media.duration * 1000 / av.time_base)
+    except (OSError, ValueError, OverflowError, av.error.FFmpegError):
+        unsupported = "The video could not be opened or decoded."
+    return dict(item, metadata=metadata, metadata_version=METADATA_VERSION,
+                verified_file=stamp, unsupported=unsupported, duration_ms=duration_ms)
+
+
+def scan_library_metadata():
+    # Folder imports verify their own entries before committing them.
+    while True:
         with LOCK:
-            if LIBRARY.get(item["id"]) is item:
-                item["metadata"] = metadata
-                item["metadata_version"] = METADATA_VERSION
-                if duration_ms and not item.get("duration_ms"):
-                    item["duration_ms"] = duration_ms
+            pending = [clip for clip in LIBRARY.values() if not clip.get("removed")]
+        for item in pending:
+            path = Path(item["path"])
+            stamp = file_stamp(path)
+            if stamp is None:
+                continue
+            if item.get("metadata_version") == METADATA_VERSION and item.get("verified_file") == stamp:
+                continue
+            verified = verify_video(item, stamp)
+            with LOCK:
+                if LIBRARY.get(item["id"]) is item and file_stamp(path) == stamp:
+                    record = dict(item, **{key: verified[key] for key in
+                                           ("metadata", "metadata_version", "verified_file",
+                                            "unsupported", "duration_ms")})
+                    updated = {**LIBRARY, item["id"]: record}
+                    try:
+                        save_json(LIBRARY_FILE, updated)
+                    except OSError:
+                        continue
+                    LIBRARY[item["id"]] = record
+        time.sleep(5)
+
+
+def rename_stamp(item):
+    stamp = item.get("verified_file")
+    if isinstance(stamp, list) and len(stamp) == 4 and all(type(value) is int for value in stamp):
+        return stamp
+    return None
+
+
+def definitely_missing(path):
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        pass
+    return False
+
+
+def rename_signature(path, stamp):
+    return path.suffix.lower(), stamp[0], stamp[1]
+
+
+def find_external_renames(missing, observed=(), known=(), roots=()):
+    missing = [item for item in missing if definitely_missing(Path(item["path"]))]
+    wanted = {rename_signature(Path(item["path"]), rename_stamp(item)) for item in missing}
+    if not wanted:
+        return []
+    paths = set(observed)
+    for item in known:
+        stamp = rename_stamp(item)
+        path = Path(item["path"])
+        if stamp and rename_signature(path, stamp) in wanted:
+            paths.add(path)
+    for parent in {Path(item["path"]).parent for item in missing}:
+        try:
+            _, files = directory_inventory(parent, {})
+            paths.update(files)
+        except OSError:
+            continue
+    candidates = defaultdict(list)
+    for path in paths:
+        stamp = file_stamp(path)
+        if stamp and not path.is_symlink():
+            signature = rename_signature(path, stamp)
+            if signature in wanted:
+                candidates[signature].append((path, stamp))
+
+    proposed = []
+    for item in missing:
+        old_path = Path(item["path"])
+        old_stamp = rename_stamp(item)
+        shared_roots = [root for root in roots if old_path.is_relative_to(root)]
+        options = [(path, stamp) for path, stamp in candidates[rename_signature(old_path, old_stamp)]
+                   if path.parent == old_path.parent or any(path.is_relative_to(root) for root in shared_roots)]
+        exact = [(path, stamp) for path, stamp in options
+                 if old_stamp[3] and stamp[3] == old_stamp[3] and path.drive == old_path.drive
+                 and (os.name != "nt" or stamp[2] == old_stamp[2])]
+        # Size and timestamps alone may identify another copy.
+        possible = exact or [(path, stamp) for path, stamp in options if stamp[2] == old_stamp[2]]
+        if len(possible) == 1:
+            path, stamp = possible[0]
+            proposed.append((item, path, stamp, bool(exact)))
+
+    targets = Counter(path for _, path, _, _ in proposed)
+    return [(item, path, stamp, exact) for item, path, stamp, exact in proposed if targets[path] == 1]
+
+
+def current_rename_records(item, path, stamp):
+    old = LIBRARY.get(item["id"])
+    if not old or old.get("removed") or old["path"] != item["path"] or rename_stamp(old) != rename_stamp(item):
+        raise ValueError("The linked clip changed. Wait for the next file check.")
+    if not definitely_missing(Path(old["path"])) or path.is_symlink() or file_stamp(path) != stamp:
+        raise ValueError("The files changed. Wait for the next file check.")
+    matches = [clip for clip in LIBRARY.values() if clip.get("linked") and Path(clip["path"]) == path]
+    if len(matches) > 1 or (matches and matches[0].get("removed")):
+        raise ValueError("The destination already has conflicting library entries.")
+    return old, matches[0] if matches else None
+
+
+def apply_external_rename(item, path, stamp, *, verified=None):
+    old, duplicate = current_rename_records(item, path, stamp)
+    duplicate_id = duplicate["id"] if duplicate else None
+    current = find_clip(state["current"])
+    if current and media_item(current)["id"] in {old["id"], duplicate_id}:
+        raise ValueError("Stop the clip on Program before updating its link.")
+
+    record = dict(old, path=str(path), name=path.name)
+    if verified is not None:
+        for key in ("metadata", "metadata_version", "duration_ms", "unsupported"):
+            record[key] = verified[key]
+    record["verified_file"] = stamp
+    updated = {**LIBRARY, old["id"]: record}
+    queue = QUEUE
+    if duplicate:
+        record["categories"] = list(dict.fromkeys([*old.get("categories", []), *duplicate.get("categories", [])]))
+        record["title"] = old.get("title") or duplicate.get("title")
+        del updated[duplicate_id]
+        queue = [
+            dict(row, media_id=old["id"], path=str(path))
+            if not row.get("marker") and row.get("media_id", row["id"]) == duplicate_id else row
+            for row in QUEUE
+        ]
+    # Save queue references while both original records still exist on disk.
+    files = [(QUEUE_FILE, queue)] if queue != QUEUE else []
+    files.append((LIBRARY_FILE, updated))
+    save_settings_files(files)
+    LIBRARY.clear()
+    LIBRARY.update(updated)
+    QUEUE[:] = queue
+    selected = state.get("cue")
+    if duplicate_id and selected == duplicate_id:
+        cue(old["id"])
+    elif selected and (clip := find_clip(selected)) and media_item(clip)["id"] == old["id"]:
+        cue(selected)
+
+
+def check_external_renames(missing, observed=(), known=(), roots=(), generation=None):
+    if not FOLDER_OPERATION.acquire(blocking=False):
+        return None
+    try:
+        candidates = find_external_renames(missing, observed, known, roots)
+        with LOCK:
+            if generation is not None and generation != folder_generation:
+                return None
+            suggestions = {}
+            for item, path, stamp, exact in candidates:
                 try:
-                    save_json(LIBRARY_FILE, LIBRARY)
-                except OSError:
-                    pass
+                    old, duplicate = current_rename_records(item, path, stamp)
+                    distinct_titles = duplicate and old.get("title") and duplicate.get("title") and old["title"] != duplicate["title"]
+                    if exact and not distinct_titles and old.get("metadata_version") == METADATA_VERSION:
+                        apply_external_rename(item, path, stamp)
+                    else:
+                        suggestions[old["id"]] = (item, path, stamp)
+                except (OSError, ValueError):
+                    continue
+            RENAME_SUGGESTIONS.clear()
+            RENAME_SUGGESTIONS.update(suggestions)
+        return {path for _, path, _, _ in candidates}
+    finally:
+        FOLDER_OPERATION.release()
+
+
+def confirm_external_rename(clip_id, destination):
+    if not isinstance(clip_id, str) or not isinstance(destination, str):
+        raise ValueError("Choose a suggested file rename.")
+    with FOLDER_OPERATION:
+        with LOCK:
+            proposal = RENAME_SUGGESTIONS.get(clip_id)
+            if not proposal or str(proposal[1]) != destination:
+                raise ValueError("The suggested rename changed. Check the library again.")
+            item, path, stamp = proposal
+            _, duplicate = current_rename_records(item, path, stamp)
+        verified = duplicate if duplicate and duplicate.get("verified_file") == stamp and (
+            duplicate.get("metadata_version") == METADATA_VERSION
+        ) and all(key in duplicate for key in ("metadata", "duration_ms", "unsupported")) else verify_video(dict(item, name=path.name, path=str(path)), stamp)
+        with LOCK:
+            if RENAME_SUGGESTIONS.get(clip_id) is not proposal:
+                raise ValueError("The suggested rename changed. Check the library again.")
+            apply_external_rename(item, path, stamp, verified=verified)
+            RENAME_SUGGESTIONS.pop(clip_id, None)
+
+
+def local_path(raw_path):
+    if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
+        raise ValueError("Choose an absolute file or folder path.")
+    if raw_path.startswith(("//./", "//?/", "\\\\.", "\\\\?")):
+        raise ValueError("Choose a regular file or folder.")
+    return Path(raw_path)
+
+
+def choose_link_path(label, *, folder=True, drop_file=False, folder_only=False, initial_folder=None):
+    if not FOLDER_PICKER.acquire(blocking=False):
+        raise ValueError("A file or folder window is already open.")
+    try:
+        if os.name == "nt":
+            command = ["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
+                       "-File", str(ROOT / "choose_media.ps1"), "-Label", label or "Link video folder"]
+            if drop_file:
+                command.append("-DropFile")
+            elif not folder:
+                command.append("-FileOnly")
+            elif folder_only:
+                command.append("-FolderOnly")
+                if initial_folder:
+                    command.extend(["-InitialFolder", str(initial_folder)])
+            flags = subprocess.CREATE_NO_WINDOW
+        elif sys.platform == "darwin":
+            prompt = ("Choose a destination folder" if folder_only else
+                      "Choose the video folder to link" if folder else "Choose the video file")
+            if folder_only and initial_folder:
+                command = ["osascript", "-e", f"""on run arguments
+return POSIX path of (choose folder with prompt "{prompt}" default location ((POSIX file (item 1 of arguments)) as alias))
+end run""", str(initial_folder)]
+            else:
+                command = ["osascript", "-e", f'POSIX path of (choose {"folder" if folder else "file"} with prompt "{prompt}")']
+            flags = 0
+        else:
+            raise ValueError("The native media picker is available on Windows and macOS.")
+        result = subprocess.run(command, capture_output=True, encoding="utf-8",
+                                errors="replace", creationflags=flags, timeout=300)
+        if result.returncode and not (sys.platform == "darwin" and "(-128)" in result.stderr):
+            raise ValueError("The native media picker could not open.")
+        return result.stdout.rstrip("\r\n") if result.returncode == 0 else ""
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("The media picker timed out. Open it again to retry.") from exc
+    finally:
+        FOLDER_PICKER.release()
+
+
+def is_directory_link(path):
+    return path.is_symlink() or (
+        os.name == "nt" and getattr(path.lstat(), "st_reparse_tag", None) == IO_REPARSE_TAG_MOUNT_POINT
+    )
+
+
+def saved_roots(values):
+    if not isinstance(values, list):
+        raise ValueError("Invalid linked folder list.")
+    roots = []
+    for value in values:
+        root = local_path(value)
+        if ".." in root.parts or root.is_relative_to(CACHE):
+            raise ValueError("Invalid linked folder path.")
+        if root not in roots:
+            roots.append(root)
+    return [str(root) for root in roots]
+
+
+def folder_part(value):
+    if not isinstance(value, str) or value in {"", ".", ".."} or any(char in value for char in "/\x00"):
+        raise ValueError("Choose a folder inside the linked root.")
+    if os.name == "nt":
+        if hasattr(os.path, "isreserved"):
+            reserved = os.path.isreserved(value)
+        else:
+            reserved = PureWindowsPath(value).is_reserved()
+        if reserved or any(char in value for char in '<>:"\\|?*') or value.endswith((" ", ".")):
+            raise ValueError("Enter a valid Windows folder name.")
+    return value
+
+
+def explorer_roots():
+    registered = [Path(value) for value in FOLDERS]
+    candidates = {}
+    for item in LIBRARY.values():
+        if not item.get("linked") or item.get("removed"):
+            continue
+        parent = Path(item["path"]).parent
+        if not parent.is_absolute() or ".." in parent.parts or any(parent.is_relative_to(root) for root in registered):
+            continue
+        names = {name.casefold() for name in item.get("categories", [])}
+        candidate = parent
+        # Legacy imports assigned the names of each subfolder along the saved path.
+        while candidate.parent != Path(candidate.anchor) and candidate.name.casefold() in names:
+            candidate = candidate.parent
+        candidates.setdefault(candidate, None)
+    inferred = []
+    for candidate in sorted(candidates, key=lambda path: len(path.parts)):
+        if not any(candidate.is_relative_to(root) and root != Path(root.anchor) for root in inferred):
+            inferred.append(candidate)
+    roots = [*registered, *inferred]
+    for value in FAVORITES:
+        favorite = Path(value)
+        if not any(favorite.is_relative_to(root) for root in roots):
+            roots.append(favorite)
+    return roots
+
+
+def favorite_entries(roots):
+    entries = []
+    for value in FAVORITES:
+        path = Path(value)
+        root = next(root for root in roots if path.is_relative_to(root))
+        entries.append(dict(path=value, name=path.name or value, root=str(root), parts=path.relative_to(root).parts,
+                            folders=FAVORITE_TREES.get(value, [])))
+    return entries
+
+
+def set_favorite(data):
+    with LOCK:
+        if data.get("starred") is True:
+            root, parts = data.get("root"), data.get("parts")
+            if not isinstance(root, str) or not isinstance(parts, list) or Path(root) not in explorer_roots():
+                raise ValueError("Choose a folder in Folders.")
+            parts = [folder_part(part) for part in parts]
+            if root in FOLDERS:
+                path = registered_folder(root, parts)
+            else:
+                saved_folder_listing(root, parts)
+                path = Path(root).joinpath(*parts)
+            updated = saved_roots([*FAVORITES, str(path)])
+        else:
+            path = local_path(data.get("path"))
+            updated = [value for value in FAVORITES if Path(value) != path]
+        if updated != FAVORITES:
+            save_json(FAVORITES_FILE, updated)
+            FAVORITES[:] = updated
+
+
+def saved_folder_listing(root, parts):
+    folder = Path(root).joinpath(*parts)
+    children = set()
+    available = not parts
+    for item in LIBRARY.values():
+        if not item.get("linked") or item.get("removed"):
+            continue
+        parent = Path(item["path"]).parent
+        if parent.is_relative_to(folder):
+            available = True
+            relative = parent.relative_to(folder).parts
+            if relative:
+                children.add(relative[0])
+    if not available:
+        raise ValueError("This folder has no saved library paths.")
+    return {"parts": parts, "children": sorted(children, key=str.casefold), "saved_only": True}
+
+
+def register_saved_folder(root):
+    with FOLDER_OPERATION, LOCK:
+        if not isinstance(root, str) or Path(root) not in explorer_roots():
+            raise ValueError("Choose a folder shown in Folder Explorer.")
+        folder = local_path(root)
+        try:
+            if not folder.is_dir() or folder.resolve() != folder:
+                raise ValueError("The folder could not be opened. Check its drive and permissions.")
+        except OSError as exc:
+            raise ValueError("The folder could not be opened. Check its drive and permissions.") from exc
+        roots = saved_roots([*FOLDERS, root])
+        if roots != FOLDERS:
+            save_json(FOLDERS_FILE, roots)
+            FOLDERS[:] = roots
+    return {}
+
+
+def registered_folder(root, parts):
+    if not isinstance(root, str) or root not in FOLDERS or not isinstance(parts, list):
+        raise ValueError("Select a linked folder.")
+    folder = Path(root)
+    try:
+        if not folder.is_dir() or folder.resolve() != folder:
+            raise ValueError("The linked folder is unavailable. Check its drive and saved path.")
+        for part in parts:
+            folder /= folder_part(part)
+            if folder.is_relative_to(CACHE) or is_directory_link(folder) or not folder.is_dir():
+                raise ValueError("This subfolder is unavailable.")
+    except OSError as exc:
+        raise ValueError("The folder is unavailable or could not be accessed.") from exc
+    return folder
+
+
+def browse_folder(root, parts):
+    if not isinstance(root, str) or not isinstance(parts, list):
+        raise ValueError("Select a linked folder.")
+    parts = [folder_part(part) for part in parts]
+    with LOCK:
+        if root not in FOLDERS:
+            if Path(root) not in explorer_roots():
+                raise ValueError("Select a linked folder.")
+            return saved_folder_listing(root, parts)
+    try:
+        folder = registered_folder(root, parts)
+        names = [child.name for child in folder.iterdir()
+                 if child != CACHE and child.is_dir() and not is_directory_link(child)]
+    except (OSError, ValueError):
+        with LOCK:
+            listing = saved_folder_listing(root, parts)
+        listing["warning"] = "The drive folder is unavailable. Showing saved library paths."
+        return listing
+    with LOCK:
+        WATCHED_FOLDERS[folder] = time.monotonic()
+    return {"parts": folder.relative_to(root).parts, "children": sorted(names, key=str.casefold)}
+
+
+def directory_inventory(folder, cache, *, force=False):
+    if folder.is_relative_to(CACHE) or is_directory_link(folder):
+        return (), ()
+    stat = folder.stat()
+    stamp = (stat.st_mtime_ns, stat.st_ino)
+    previous = cache.get(folder)
+    moment = time.monotonic()
+    if not force and previous and previous[0] == stamp and moment - previous[3] < 5:
+        return previous[1], previous[2]
+    children, files = [], []
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                if entry.is_dir(follow_symlinks=False) and not is_directory_link(path) and path != CACHE:
+                    children.append(path)
+                elif path.suffix.lower() in FORMATS | OTHER_VIDEO_FORMATS and entry.is_file(follow_symlinks=False):
+                    files.append(path)
+            except OSError:
+                continue
+    cache[folder] = (stamp, tuple(children), tuple(files), moment)
+    return cache[folder][1], cache[folder][2]
+
+
+def discover_watched_folders(favorites, watched, cache):
+    trees, observed, visited = {}, set(), set()
+    for root in favorites:
+        pending = [root]
+        branches = []
+        while pending:
+            folder = pending.pop()
+            try:
+                children, files = directory_inventory(folder, cache, force=folder == root)
+            except OSError:
+                continue
+            visited.add(folder)
+            if folder != root:
+                branches.append(folder.relative_to(root).parts)
+            pending.extend(children)
+            observed.update(files)
+        if root in visited:
+            trees[str(root)] = sorted(branches, key=lambda parts: tuple(part.casefold() for part in parts))
+    for folder in watched:
+        if folder in visited:
+            continue
+        try:
+            children, files = directory_inventory(folder, cache, force=True)
+            visited.add(folder)
+            observed.update(files)
+            # Look in immediate subfolders for a file moved out of the open folder.
+            for child in children:
+                if child not in visited:
+                    try:
+                        _, files = directory_inventory(child, cache)
+                        visited.add(child)
+                        observed.update(files)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    for folder in cache.keys() - visited:
+        del cache[folder]
+    return trees, observed
+
+
+def add_watched_clips(paths, pending, generation):
+    if not FOLDER_OPERATION.acquire(blocking=False):
+        return
+    try:
+        with LOCK:
+            if generation != folder_generation:
+                return
+            known = {Path(item["path"]) for item in LIBRARY.values() if item.get("linked")}
+        candidates = paths - known
+        ready = {}
+        next_pending = {}
+        for path in sorted(candidates):
+            stamp = file_stamp(path)
+            if not stamp or path.is_symlink():
+                continue
+            if pending.get(path) != stamp or len(ready) >= 6:
+                # Wait for stable copies and bound each automatic verification batch.
+                next_pending[path] = stamp
+                continue
+            clip_id = uuid.uuid4().hex
+            ready[clip_id] = verify_video(dict(id=clip_id, name=path.name, path=str(path), linked=True), stamp)
+        with LOCK:
+            if generation != folder_generation:
+                return
+            unchanged = {key: item for key, item in ready.items()
+                         if file_stamp(Path(item["path"])) == item["verified_file"]}
+            if unchanged:
+                save_json(LIBRARY_FILE, {**LIBRARY, **unchanged})
+                LIBRARY.update(unchanged)
+        pending.clear()
+        pending.update(next_pending)
+    finally:
+        FOLDER_OPERATION.release()
+
+
+def watch_folder_changes():
+    cache, pending = {}, {}
+    while True:
+        try:
+            with LOCK:
+                generation = folder_generation
+                favorites = [Path(path) for path in FAVORITES]
+                cutoff = time.monotonic() - 15
+                for path in list(WATCHED_FOLDERS):
+                    if WATCHED_FOLDERS[path] < cutoff:
+                        del WATCHED_FOLDERS[path]
+                watched = list(WATCHED_FOLDERS)
+                known = [item for item in LIBRARY.values() if item.get("linked")]
+                roots = {Path(root) for root in FOLDERS} | set(favorites)
+            trees, observed = discover_watched_folders(favorites, watched, cache)
+            with LOCK:
+                if generation != folder_generation:
+                    continue
+                FAVORITE_TREES.clear()
+                FAVORITE_TREES.update(trees)
+            missing = [item for item in known if not item.get("removed") and rename_stamp(item)
+                       and file_stamp(Path(item["path"])) is None]
+            held = check_external_renames(missing, observed, known, roots, generation)
+            if held is not None:
+                add_watched_clips(observed - held, pending, generation)
+        except (OSError, ValueError):
+            pass
+        finally:
+            time.sleep(2)
+
+
+def import_folder(root, *, parts=None):
+    with FOLDER_OPERATION:
+        return scan_linked_folder(root, parts)
+
+
+def scan_linked_folder(root, parts):
+    if parts is None:
+        folder = local_path(root).resolve()
+        if not folder.is_dir() or folder.is_relative_to(CACHE):
+            raise ValueError("Choose a video folder outside the rundown cache.")
+    else:
+        folder = registered_folder(root, parts)
+    with LOCK:
+        if not recover_folder_rename():
+            raise ValueError("Reconnect the drive to finish recovering the previous folder rename.")
+        generation = folder_generation
+        if parts is None:
+            root = next((item for item in FOLDERS if Path(item) == folder), str(folder))
+        elif root not in FOLDERS:
+            raise ValueError("The linked folders changed. Open Folder Explorer again.")
+        known = {os.path.normcase(item["path"]): item for item in LIBRARY.values() if item.get("linked")}
+
+    discovered = []
+
+    def scan_error(exc):
+        raise ValueError(f"Could not read folder: {exc.filename}") from exc
+
+    for current, dirs, names in os.walk(folder, onerror=scan_error):
+        parent = Path(current)
+        dirs[:] = sorted(name for name in dirs if not is_directory_link(parent / name) and parent / name != CACHE)
+        for name in sorted(names):
+            path = parent / name
+            if path.suffix.lower() not in FORMATS | OTHER_VIDEO_FORMATS or path.is_symlink():
+                continue
+            key = os.path.normcase(str(path))
+            stamp = file_stamp(path)
+            if stamp is None:
+                continue
+            previous = known.get(key)
+            if previous and previous.get("metadata_version") == METADATA_VERSION and previous.get("verified_file") == stamp:
+                record = previous
+            else:
+                item = dict(id=uuid.uuid4().hex, name=name, path=str(path), linked=True)
+                record = verify_video(item, stamp)
+            discovered.append((key, record))
+
+    with LOCK:
+        if generation != folder_generation:
+            raise ValueError("The library was restored during the scan. Refresh the folder again.")
+        paths = {os.path.normcase(item["path"]): item for item in LIBRARY.values() if item.get("linked")}
+        updated = LIBRARY.copy()
+        registered = saved_roots([*FOLDERS, root])
+        new_count = 0
+        for key, item in discovered:
+            existing = paths.get(key)
+            if existing is None and key in known:
+                continue
+            if existing and (known.get(key) is item or existing.get("verified_file") == item.get("verified_file")):
+                record = dict(existing)
+            else:
+                record = {**(existing or {}), **item}
+            if existing:
+                record["id"] = existing["id"]
+            else:
+                new_count += 1
+            updated[record["id"]] = record
+
+        changes = [(file, value) for file, value, old in (
+            (FOLDERS_FILE, registered, FOLDERS), (LIBRARY_FILE, updated, LIBRARY),
+        ) if value != old]
+        save_settings_files(changes)
+        LIBRARY.update(updated)
+        FOLDERS[:] = registered
+    return dict(root=root, total=len(discovered), added=new_count,
+                unsupported=sum(bool(item.get("unsupported")) for _, item in discovered))
+
+
+def rename_no_replace(old, new):
+    if os.name == "nt":
+        old.rename(new)
+    elif sys.platform == "darwin":
+        import ctypes
+        rename = ctypes.CDLL(None, use_errno=True).renamex_np
+        rename.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+        rename.restype = ctypes.c_int
+        rename_excl = 0x00000004
+        if rename(os.fsencode(old), os.fsencode(new), rename_excl):
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error), str(new))
+    else:
+        raise ValueError("Folder renaming is available on Windows and macOS.")
+
+
+def renamed_paths(old, new):
+    return {clip_id: dict(item, path=str(new / Path(item["path"]).relative_to(old)))
+            for clip_id, item in LIBRARY.items()
+            if item.get("linked") and Path(item["path"]).is_relative_to(old)}
+
+
+def folder_identity(path):
+    info = path.stat()
+    return [info.st_dev, info.st_ino]
+
+
+def save_folder_rename(old, new, updates):
+    updated = {**LIBRARY, **updates}
+    favorites = saved_roots([
+        str(new / Path(value).relative_to(old)) if Path(value).is_relative_to(old) else value
+        for value in FAVORITES
+    ])
+    changes = [(LIBRARY_FILE, updated)]
+    if favorites != FAVORITES:
+        changes.append((FAVORITES_FILE, favorites))
+    save_settings_files(changes)
+    LIBRARY.update(updates)
+    FAVORITES[:] = favorites
+
+
+def recover_folder_rename():
+    if not FOLDER_RENAME_FILE.is_file():
+        return True
+    pending = json.loads(FOLDER_RENAME_FILE.read_bytes())
+    new = local_path(pending["new"])
+    old = local_path(pending["old"])
+    # Check the actual directory entry spelling for case-only renames.
+    try:
+        entries = {entry.name: entry for entry in new.parent.iterdir()}
+        if new.name in entries and folder_identity(entries[new.name]) == pending["identity"]:
+            save_folder_rename(old, new, renamed_paths(old, new))
+        FOLDER_RENAME_FILE.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def rename_linked_folder(root, parts, name):
+    with FOLDER_OPERATION, LOCK:
+        if not recover_folder_rename() or not recover_file_change():
+            raise ValueError("Reconnect the drive to finish recovering the previous file or folder operation.")
+        old = registered_folder(root, parts)
+        if not parts or ROOT.is_relative_to(old) or old.is_relative_to(ROOT) or any(
+            Path(other).is_relative_to(old) for other in FOLDERS
+        ):
+            raise ValueError("Choose a subfolder that does not contain the toolkit or another linked root.")
+        name = folder_part(name)
+        if not name.strip() or any(ord(char) < 32 for char in name):
+            raise ValueError("Enter a valid folder name.")
+        if name == old.name:
+            return {"parts": parts}
+        new = old.with_name(name)
+        # The OS also rejects an existing destination at the time of the rename.
+        if name in {entry.name for entry in old.parent.iterdir()}:
+            raise ValueError("A file or folder already uses that name.")
+        updates = renamed_paths(old, new)
+        if any(clip_id not in updates and item.get("linked") and Path(item["path"]).is_relative_to(new)
+               for clip_id, item in LIBRARY.items()):
+            raise ValueError("The destination still has linked clips in the library.")
+        current = find_clip(state["current"])
+        if current and media_item(current)["id"] in updates:
+            raise ValueError("Stop the clip on Program before renaming its folder.")
+        if os.name != "nt" and sys.platform != "darwin":
+            raise ValueError("Folder renaming is available on Windows and macOS.")
+
+        save_json(FOLDER_RENAME_FILE, dict(old=str(old), new=str(new), identity=folder_identity(old)))
+        try:
+            rename_no_replace(old, new)
+        except OSError as exc:
+            FOLDER_RENAME_FILE.unlink()
+            raise ValueError("The folder could not be renamed. Check the name, folder permissions, and open files.") from exc
+        try:
+            save_folder_rename(old, new, updates)
+        except OSError as exc:
+            try:
+                rename_no_replace(new, old)
+            except OSError:
+                LIBRARY.update(updates)
+                raise ValueError("The folder moved, but saving its new path failed. Restart Video Rundown to recover the links.") from exc
+            FOLDER_RENAME_FILE.unlink()
+            raise ValueError("The path update could not be saved. The original folder name was restored.") from exc
+        FOLDER_RENAME_FILE.unlink()
+        cued = find_clip(state.get("cue"))
+        if cued and media_item(cued)["id"] in updates:
+            cue(cued["id"])
+        return {"parts": [*parts[:-1], name]}
+
+
+def check_file_unlocked(path):
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    handle = create(str(path), 0x10000, 0, None, 3, 0, None)  # DELETE, exclusive, OPEN_EXISTING
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    close(handle)
+
+
+def update_file_path(item, target, linked, renamed, stamp):
+    record = dict(item, path=str(target), name=target.name, linked=linked)
+    if linked:
+        record.pop("cache_name", None)
+    else:
+        record["cache_name"] = target.name
+    if renamed:
+        record.pop("title", None)
+    current = file_stamp(target)
+    if current and item.get("verified_file") == stamp and current[:2] == stamp[:2]:
+        record["verified_file"] = current
+        stat = target.stat()
+        details = dict(item.get("metadata") or {})
+        details.update(size_bytes=stat.st_size,
+                       modified_at=item.get("source_modified_at", stat.st_mtime),
+                       cached_modified=not linked and "source_modified_at" not in item)
+        created_at = getattr(stat, "st_birthtime", None)
+        if created_at is not None:
+            details["created_at"] = created_at
+        record["metadata"] = details
+    else:
+        record.pop("verified_file", None)
+    return record
+
+
+def recover_file_change():
+    if not FILE_CHANGE_FILE.is_file():
+        return True
+    change = json.loads(FILE_CHANGE_FILE.read_bytes())
+    item = LIBRARY.get(change["clip"])
+    source, target = Path(change["source"]), Path(change["target"])
+    try:
+        if item and item["path"] == str(source):
+            exact_name = any(entry.name == target.name for entry in target.parent.iterdir())
+            if exact_name and folder_identity(target) == change["identity"]:
+                record = update_file_path(item, target, change["linked"], change["renamed"], change["stamp"])
+                save_json(LIBRARY_FILE, {**LIBRARY, item["id"]: record})
+                LIBRARY[item["id"]] = record
+            elif not source.is_file():
+                return False
+        if change.get("stage"):
+            stage = Path(change["stage"])
+            if stage.parent == target.parent and re.fullmatch(r"\.rundown-[a-f0-9]{32}\.part", stage.name):
+                stage.unlink(missing_ok=True)
+        FILE_CHANGE_FILE.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def copy_for_move(source, stage, stamp):
+    count = 0
+    with source.open("rb") as original, stage.open("xb") as output:
+        while block := original.read(1024**2):
+            output.write(block)
+            count += len(block)
+            with LOCK:
+                FILE_OPERATION["bytes"] = count
+        output.flush()
+        os.fsync(output.fileno())
+    shutil.copystat(source, stage)
+    if count != stamp[0] or file_stamp(source) != stamp:
+        raise ValueError("The original changed during the move. The original file was kept.")
+
+
+def perform_file_change(clip_id, request):
+    with FOLDER_OPERATION:
+        with LOCK:
+            if not recover_file_change():
+                raise ValueError("Reconnect the drive to recover the previous file operation.")
+            item = LIBRARY.get(clip_id)
+            if not item:
+                raise ValueError("This clip is no longer in the library.")
+            if not request.get("path") == item["path"]:
+                raise ValueError("The clip path changed. Open its menu again.")
+            source = Path(item["path"])
+            if source.is_symlink() or not (stamp := file_stamp(source)):
+                raise ValueError("This video file is missing or cannot be accessed.")
+            renamed = request["kind"] == "rename"
+            if renamed:
+                name = folder_part(request.get("name"))
+                if name != name.strip() or not name.strip() or any(ord(char) < 32 for char in name):
+                    raise ValueError("Enter a valid file name.")
+                if Path(name).suffix.lower() != source.suffix.lower():
+                    raise ValueError("Keep the original file extension.")
+                target = source.with_name(name)
+                linked = bool(item.get("linked"))
+            else:
+                directory = local_path(request.get("destination")).resolve()
+                if (not directory.is_dir() or directory.is_relative_to(CACHE)
+                        or directory.is_relative_to(ROOT)):
+                    raise ValueError("Choose a destination folder outside the toolkit.")
+                target = directory / folder_part(item["name"] if not item.get("linked") else source.name)
+                linked = True
+            if str(source) == str(target):
+                return "The file is already at this path."
+            if (target != source and os.path.lexists(target)) or any(
+                other_id != clip_id and Path(other["path"]) == target for other_id, other in LIBRARY.items()
+            ):
+                raise ValueError("A file or library entry already uses that destination.")
+            if target == source and any(entry.name == target.name for entry in source.parent.iterdir()):
+                raise ValueError("A file or folder already uses that name.")
+            FILE_OPERATION["total"] = stamp[0]
+
+        change = dict(clip=clip_id, source=str(source), target=str(target), linked=linked,
+                      renamed=renamed, stamp=stamp, identity=folder_identity(source))
+        stage = target.parent / (".rundown-" + uuid.uuid4().hex + ".part")
+        copied = False
+        check_file_unlocked(source)
+        change["stage"] = str(stage)
+        save_json(FILE_CHANGE_FILE, change)
+        try:
+            try:
+                rename_no_replace(source, target)
+            except OSError as error:
+                if error.errno != errno.EXDEV and getattr(error, "winerror", None) != 17:
+                    raise
+                copy_for_move(source, stage, stamp)
+                check_file_unlocked(source)
+                change["identity"] = folder_identity(stage)
+                save_json(FILE_CHANGE_FILE, change)
+                rename_no_replace(stage, target)
+                copied = True
+        except (OSError, ValueError):
+            FILE_CHANGE_FILE.unlink(missing_ok=True)
+            raise
+        finally:
+            stage.unlink(missing_ok=True)
+
+        target_stamp = file_stamp(target)
+        if target_stamp is None or target_stamp[0] != stamp[0]:
+            raise ValueError("The destination could not be verified. Check both folders before retrying.")
+        with LOCK:
+            item = LIBRARY[clip_id]
+            record = update_file_path(item, target, linked, renamed, stamp)
+            try:
+                save_json(LIBRARY_FILE, {**LIBRARY, clip_id: record})
+            except OSError as error:
+                try:
+                    undo_file_publish(source, target, target_stamp, copied)
+                    FILE_CHANGE_FILE.unlink()
+                except (OSError, ValueError):
+                    raise ValueError("The file reached its destination, but its link could not be saved. Restart Video Rundown to recover it.") from error
+                raise ValueError("The library could not be saved. The original file was kept.") from error
+            LIBRARY[clip_id] = record
+
+        if copied:
+            try:
+                check_file_unlocked(source)
+                if file_stamp(source) != stamp or file_stamp(target) != target_stamp:
+                    raise ValueError("The original or destination changed during the move.")
+                source.unlink()
+            except (OSError, ValueError) as error:
+                with LOCK:
+                    try:
+                        save_json(LIBRARY_FILE, {**LIBRARY, clip_id: item})
+                        LIBRARY[clip_id] = item
+                        undo_file_publish(source, target, target_stamp, True)
+                    except (OSError, ValueError):
+                        FILE_CHANGE_FILE.unlink(missing_ok=True)
+                        raise ValueError("The original could not be removed. Both files were kept; check the path shown in File Library.") from error
+                FILE_CHANGE_FILE.unlink(missing_ok=True)
+                raise ValueError("The original could not be removed. Close any app using it and try again.") from error
+
+        FILE_CHANGE_FILE.unlink(missing_ok=True)
+        with LOCK:
+            RENAME_SUGGESTIONS.pop(clip_id, None)
+            picked = find_clip(state.get("cue"))
+            if picked and media_item(picked)["id"] == clip_id:
+                cue(picked["id"])
+        return "File renamed on drive." if renamed else "File moved."
+
+
+def undo_file_publish(source, target, stamp, copied):
+    if stamp is None or file_stamp(target) != stamp:
+        raise ValueError("The destination changed.")
+    if copied:
+        target.unlink()
+    else:
+        rename_no_replace(target, source)
+
+
+def run_file_operation(clip_id, request):
+    try:
+        message = perform_file_change(clip_id, request)
+    except ValueError as error:
+        with LOCK:
+            FILE_OPERATION.update(status="failed", message=str(error))
+    except OSError as error:
+        with LOCK:
+            if getattr(error, "winerror", None) in {32, 33} or error.errno == errno.EBUSY:
+                message = "The video is open in another program. Close it and try again."
+            elif error.errno == errno.ENOSPC:
+                message = "The destination drive does not have enough free space."
+            elif isinstance(error, FileExistsError):
+                message = "A file or folder already uses that destination."
+            else:
+                message = "The file operation was blocked. Check file permissions and close apps using the video."
+            FILE_OPERATION.update(status="failed", message=message)
+    else:
+        with LOCK:
+            FILE_OPERATION.update(status="done", bytes=FILE_OPERATION["total"], message=message)
+
+
+def start_file_operation(data):
+    kind, clip_id = data.get("kind"), data.get("id")
+    if kind not in ("move", "rename") or not isinstance(clip_id, str):
+        raise ValueError("Choose a clip to organize.")
+    with LOCK:
+        if FILE_OPERATION.get("status") == "running":
+            raise ValueError("Another file operation is already running.")
+        item = LIBRARY.get(clip_id)
+        current = find_clip(state["current"])
+        if not item:
+            raise ValueError("Choose a clip to organize.")
+        if current and media_item(current)["id"] == clip_id:
+            raise ValueError("Stop the clip on Program before moving or renaming it.")
+        if data.get("path") != item["path"]:
+            raise ValueError("The clip path changed. Open its menu again.")
+        job = uuid.uuid4().hex
+        FILE_OPERATION.clear()
+        FILE_OPERATION.update(id=job, clip=clip_id, status="running", kind=kind, bytes=0, total=0, message="")
+        threading.Thread(target=run_file_operation, args=(clip_id, data), daemon=True).start()
+    return {"id": job}
+
+
+def link_single_file(value):
+    with FOLDER_OPERATION:
+        path = local_path(value).resolve()
+        if path.suffix.lower() not in FORMATS | OTHER_VIDEO_FORMATS or path.is_relative_to(CACHE):
+            raise ValueError("Choose a video file outside the rundown cache.")
+        stamp = file_stamp(path)
+        if stamp is None:
+            raise ValueError("The video file is unavailable.")
+        with LOCK:
+            generation = folder_generation
+            existing = next((item for item in LIBRARY.values() if item.get("linked") and Path(item["path"]) == path), None)
+            if existing:
+                return {"id": existing["id"], "unsupported": existing.get("unsupported")}
+        clip_id = uuid.uuid4().hex
+        record = verify_video(dict(id=clip_id, name=path.name, path=str(path), linked=True), stamp)
+        with LOCK:
+            if generation != folder_generation or file_stamp(path) != stamp:
+                raise ValueError("The library or video changed. Link the file again.")
+            save_json(LIBRARY_FILE, {**LIBRARY, clip_id: record})
+            LIBRARY[clip_id] = record
+        return {"id": clip_id, "unsupported": record.get("unsupported")}
+
+
+def cache_path(clip_id, item):
+    suffix = Path(item["name"]).suffix.lower()
+    cache_name = item.get("cache_name")
+    if cache_name is None:
+        return CACHE / (clip_id + suffix)
+    if folder_part(cache_name) != cache_name or Path(cache_name).suffix.lower() != suffix:
+        raise ValueError("Invalid cached video file name.")
+    return CACHE / cache_name
 
 
 def history_csv():
@@ -185,44 +1265,26 @@ def create_backup(kind):
         if kind == "csv":
             temporary.write_text(history_csv(), encoding="utf-8-sig", newline="")
         else:
-            connection = sqlite3.connect(temporary)
-            try:
-                with connection:
-                    connection.execute("PRAGMA user_version = 2")
-                    connection.execute("CREATE TABLE library (id TEXT PRIMARY KEY, name TEXT, title TEXT, duration_ms INTEGER, removed INTEGER NOT NULL)")
-                    connection.executemany("INSERT INTO library VALUES (?, ?, ?, ?, ?)",
-                        [(item["id"], item["name"], clip_title(item), item.get("duration_ms"), int(bool(item.get("removed")))) for item in LIBRARY.values()])
-                    connection.execute("CREATE TABLE library_details (id TEXT PRIMARY KEY, metadata TEXT, source_modified_at REAL)")
-                    connection.executemany("INSERT INTO library_details VALUES (?, ?, ?)",
-                        [(item["id"], json.dumps(item.get("metadata")), item.get("source_modified_at")) for item in LIBRARY.values()])
-                    connection.execute("CREATE TABLE categories (name TEXT PRIMARY KEY)")
-                    connection.executemany("INSERT INTO categories VALUES (?)", [(name,) for name in CATEGORIES])
-                    connection.execute("CREATE TABLE clip_categories (media_id TEXT, category TEXT, PRIMARY KEY (media_id, category))")
-                    connection.executemany("INSERT INTO clip_categories VALUES (?, ?)",
-                        [(item["id"], category) for item in LIBRARY.values() for category in item.get("categories", [])])
-                    connection.execute("CREATE TABLE playlist (position INTEGER PRIMARY KEY, id TEXT, media_id TEXT, title TEXT, marker INTEGER, played INTEGER)")
-                    connection.executemany("INSERT INTO playlist VALUES (?, ?, ?, ?, ?, ?)",
-                        [(i, item["id"], None if item.get("marker") else item.get("media_id", item["id"]),
-                          None if item.get("marker") else clip_title(item), bool(item.get("marker")), bool(item.get("played")))
-                         for i, item in enumerate(QUEUE, 1)])
-                    connection.execute("CREATE TABLE history (clip TEXT, started_epoch REAL, ended_epoch REAL, result TEXT)")
-                    connection.executemany("INSERT INTO history VALUES (?, ?, ?, ?)",
-                        [(item["name"], item["started"], item["ended"], item["result"]) for item in HISTORY])
-                    connection.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
-                    connection.executemany("INSERT INTO settings VALUES (?, ?)",
-                        [(key, json.dumps(state.get(key))) for key in ("auto", "auto_cut", "next_cue")] +
-                        [("created_at", datetime.now().astimezone().isoformat())])
-            finally:
-                connection.close()
+            snapshot = dict(
+                version=1, created_at=datetime.now().astimezone().isoformat(),
+                library={clip_id: {key: value for key, value in item.items()
+                                   if key not in {"verified_file", "metadata_version", "unsupported"}
+                                   and (key != "path" or item.get("linked"))}
+                         for clip_id, item in LIBRARY.items()},
+                playlist=[{"id": item["id"], "marker": True} if item.get("marker") else
+                          {"id": item["id"], "media_id": item.get("media_id", item["id"])}
+                          for item in QUEUE if not item.get("played")],
+                categories=CATEGORIES, history=HISTORY, folders=FOLDERS, favorites=FAVORITES,
+                settings={key: state.get(key) for key in ("auto", "auto_cut", "next_cue")},
+            )
+            temporary.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
     return {"name": name, "path": str(path)}
 
 
-def restore_backup(path):
-    if state["current"]:
-        raise ValueError("Stop the rundown before restoring a backup.")
+def read_legacy_backup(path):
     try:
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
             db.execute("PRAGMA trusted_schema = OFF")
@@ -276,31 +1338,114 @@ def restore_backup(path):
     except (sqlite3.Error, ValueError, TypeError, AttributeError, OverflowError) as exc:
         raise ValueError("This file is not a valid Video Rundown SQLite backup.") from exc
 
-    if LIBRARY or QUEUE or HISTORY or CATEGORIES:
-        create_backup("sqlite")
-    updates = [(LIBRARY_FILE, library), (QUEUE_FILE, queue), (HISTORY_FILE, history),
-               (CATEGORIES_FILE, categories), (SETTINGS_FILE, settings)]
-    originals = {file: file.read_bytes() if file.exists() else None for file, _ in updates}
-    saved = []
+    return library, queue, categories, history, settings
+
+
+def read_json_backup(path):
     try:
-        for file, data in updates:
-            save_json(file, data)
-            saved.append(file)
-    except OSError:
-        for file in reversed(saved):
-            original = originals[file]
-            if original is None:
-                file.unlink(missing_ok=True)
+        snapshot = json.loads(path.read_text(encoding="utf-8-sig"))
+        if snapshot["version"] != 1:
+            raise ValueError("Unrecognized backup version.")
+        library = {}
+        cache_paths = set()
+        for clip_id, item in snapshot["library"].items():
+            name = item["name"]
+            if not re.fullmatch(r"[a-f0-9]{32}", clip_id) or not isinstance(name, str) or not name:
+                raise ValueError("Invalid media record.")
+            extension = Path(name).suffix.lower()
+            linked = item.get("linked") is True
+            if extension not in (FORMATS | OTHER_VIDEO_FORMATS if linked else FORMATS):
+                raise ValueError("Invalid media extension.")
+            media_path = local_path(item["path"]) if linked else cache_path(clip_id, item)
+            if linked and (media_path.suffix.lower() != extension or media_path.is_relative_to(CACHE)):
+                raise ValueError("Invalid linked media path.")
+            if not linked:
+                if media_path in cache_paths:
+                    raise ValueError("Duplicate cached video path.")
+                cache_paths.add(media_path)
+            title = item.get("title")
+            duration_ms = item.get("duration_ms")
+            library[clip_id] = dict(id=clip_id, name=name, path=str(media_path), linked=linked,
+                                    title=title if isinstance(title, str) else None,
+                                    removed=item.get("removed") is True,
+                                    categories=[backup_category(value) for value in item.get("categories", [])],
+                                    duration_ms=duration_ms if type(duration_ms) is int and duration_ms >= 0 else 0)
+            if not linked and item.get("cache_name") is not None:
+                library[clip_id]["cache_name"] = media_path.name
+            modified = item.get("source_modified_at")
+            if type(modified) in {int, float} and math.isfinite(modified):
+                library[clip_id]["source_modified_at"] = modified
+        categories = list(dict.fromkeys(backup_category(name) for name in snapshot["categories"]))
+        queue = []
+        seen = set()
+        for row in snapshot["playlist"]:
+            clip_id = row["id"]
+            if not re.fullmatch(r"[a-f0-9]{32}", clip_id) or clip_id in seen:
+                raise ValueError("Invalid playlist record.")
+            seen.add(clip_id)
+            if row.get("marker") is True:
+                queue.append(dict(id=clip_id, marker=True))
             else:
-                temporary = file.with_suffix(".tmp")
-                temporary.write_bytes(original)
-                temporary.replace(file)
-        raise
+                item = library[row["media_id"]]
+                if item["removed"]:
+                    raise ValueError("Playlist references a removed clip.")
+                queue.append(dict(item, id=clip_id, media_id=item["id"], played=False))
+        history = []
+        for row in snapshot["history"]:
+            name, result, started, ended = (row[key] for key in ("name", "result", "started", "ended"))
+            if not isinstance(name, str) or not isinstance(result, str) or not all(
+                type(value) in {int, float} and math.isfinite(value) and abs(value) <= 253402300799
+                for value in (started, ended)
+            ):
+                raise ValueError("Invalid playback history.")
+            history.append(dict(name=name, result=result, started=started, ended=ended))
+        raw_settings = snapshot["settings"]
+        mode = raw_settings.get("auto_cut")
+        next_cue = raw_settings.get("next_cue")
+        settings = dict(auto=raw_settings.get("auto") is True,
+                        auto_cut=mode if mode in {"off", "clip", "rundown"} else "off",
+                        next_cue=next_cue if any(row["id"] == next_cue and not row.get("marker") for row in queue) else None)
+        return (library, queue, categories, history, settings, saved_roots(snapshot.get("folders", [])),
+                saved_roots(snapshot.get("favorites", [])))
+    except (ValueError, TypeError, AttributeError, KeyError, OverflowError) as exc:
+        raise ValueError("This file is not a valid Video Rundown JSON backup.") from exc
+
+
+def backup_category(name):
+    # Folder names can be longer than manually entered categories.
+    if not isinstance(name, str) or not name or len(name) > 255 or any(ord(char) < 32 for char in name):
+        raise ValueError("Invalid category name.")
+    return name
+
+
+def restore_backup(path, *, legacy=False):
+    global folder_generation
+    if not recover_folder_rename():
+        raise ValueError("Reconnect the drive to finish recovering the previous folder rename.")
+    if state["current"] or FILE_OPERATION.get("status") == "running":
+        raise ValueError("Stop the rundown and wait for file operations before restoring a backup.")
+    if not recover_file_change():
+        raise ValueError("Reconnect the drive to recover the last file operation before restoring.")
+    library, queue, categories, history, settings, folders, favorites = (
+        (*read_legacy_backup(path), [], []) if legacy else read_json_backup(path)
+    )
+    if LIBRARY or QUEUE or HISTORY or CATEGORIES or FOLDERS or FAVORITES:
+        create_backup("json")
+    updates = [(LIBRARY_FILE, library), (QUEUE_FILE, queue), (HISTORY_FILE, history),
+               (CATEGORIES_FILE, categories), (SETTINGS_FILE, settings), (FOLDERS_FILE, folders),
+               (FAVORITES_FILE, favorites)]
+    save_settings_files(updates)
     LIBRARY.clear()
     LIBRARY.update(library)
     QUEUE[:] = queue
     HISTORY[:] = history
     CATEGORIES[:] = categories
+    FOLDERS[:] = folders
+    FAVORITES[:] = favorites
+    folder_generation += 1
+    RENAME_SUGGESTIONS.clear()
+    WATCHED_FOLDERS.clear()
+    FAVORITE_TREES.clear()
     state.update(settings, return_ready=False, handoff="")
     cue(None)
 
@@ -308,11 +1453,13 @@ def restore_backup(path):
 def list_backups():
     return [{"name": path.name, "size": path.stat().st_size} for path in
             sorted(BACKUPS.glob("rundown-*"), reverse=True)
-            if path.is_file() and path.suffix in {".csv", ".sqlite"}]
+            if path.is_file() and path.suffix in {".csv", ".sqlite", ".json"}]
 
 
 def obs_settings():
-    if os.name == "nt":
+    if config := os.getenv("OBS_TOOLKIT_CONFIG_DIR"):
+        base = Path(config)
+    elif os.name == "nt":
         base = Path(os.environ.get("APPDATA", str(Path.home()))) / "obs-studio"
     else:
         base = Path.home() / "Library/Application Support/obs-studio"
@@ -333,40 +1480,83 @@ def obs():
     return client
 
 
-def setup():
+def rundown_input(c, items):
+    if not any(item["sourceName"] == SOURCE for item in items):
+        return None
+    source = c.get_input_settings(SOURCE)
+    return source.input_settings if source.input_kind == "ffmpeg_source" else None
+
+
+def rundown_ready(c):
+    source = rundown_input(c, c.get_scene_item_list(SCENE).scene_items)
+    return source is not None and source.get(RUNDOWN_OWNER) is True
+
+
+def source_is_shared(c, scenes):
+    for scene in scenes:
+        name = scene["sceneName"]
+        if name != SCENE and any(item["sourceName"] == SOURCE for item in c.get_scene_item_list(name).scene_items):
+            return True
+    return any(item["sourceName"] == SOURCE for name in c.get_group_list().groups
+               for item in c.get_group_scene_item_list(name).scene_items)
+
+
+def setup(adopt_existing=False):
     c = obs()
-    if not any(item["sceneName"] == SCENE for item in c.get_scene_list().scenes):
+    scenes = c.get_scene_list().scenes
+    scene_exists = any(item["sceneName"] == SCENE for item in scenes)
+    source_exists = any(item["inputName"] == SOURCE for item in c.get_input_list().inputs)
+    if scene_exists or source_exists:
+        items = c.get_scene_item_list(SCENE).scene_items if scene_exists else []
+        source = rundown_input(c, items) if source_exists else None
+        if source is not None and source.get(RUNDOWN_OWNER) is True:
+            state["ready"] = True
+            return
+        if source is None or source_is_shared(c, scenes):
+            raise ValueError(
+                "An existing OBS scene or source uses a Video Rundown name. "
+                "Rename the conflicting scene or source in OBS before setting up Video Rundown."
+            )
+        if not adopt_existing:
+            raise ValueError("Confirm that Video Rundown can use the existing scene and source.")
+        # Adopt the standalone pair used by earlier toolkit versions, keeping its layout.
+        c.set_input_settings(SOURCE, {RUNDOWN_OWNER: True}, True)
+    else:
+        video = c.get_video_settings()
         c.create_scene(SCENE)
-    existing = next((item for item in c.get_input_list().inputs if item["inputName"] == SOURCE), None)
-    if existing and existing["inputKind"] != "ffmpeg_source":
-        raise ValueError("A different source already uses the name Rundown Player.")
-    items = c.get_scene_item_list(SCENE).scene_items
-    if not existing:
-        c.create_input(SCENE, SOURCE, "ffmpeg_source", {"is_local_file": True}, True)
-    elif not any(item["sourceName"] == SOURCE for item in items):
-        c.create_scene_item(SCENE, SOURCE, True)
-    item = next(item for item in c.get_scene_item_list(SCENE).scene_items if item["sourceName"] == SOURCE)
-    video = c.get_video_settings()
-    c.set_scene_item_transform(SCENE, item["sceneItemId"], {
-        "positionX": 0, "positionY": 0, "alignment": 5,
-        "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
-        "boundsWidth": video.base_width, "boundsHeight": video.base_height,
-    })
+        item_id = None
+        try:
+            created = c.create_input(SCENE, SOURCE, "ffmpeg_source",
+                                     {"is_local_file": True, RUNDOWN_OWNER: True}, True)
+            item_id = created.scene_item_id
+            c.set_scene_item_transform(SCENE, item_id, {
+                "positionX": 0, "positionY": 0, "alignment": 5,
+                "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
+                "boundsWidth": video.base_width, "boundsHeight": video.base_height,
+            })
+        except Exception:
+            with suppress(Exception):
+                items = c.get_scene_item_list(SCENE).scene_items
+                if not items or (len(items) == 1 and items[0]["sceneItemId"] == item_id):
+                    c.remove_scene(SCENE)
+            raise
     state["ready"] = True
 
 
 def play(clip):
-    if not Path(clip["path"]).is_file():
-        raise ValueError("This video is missing. Reconnect it in Backups.")
+    item = require_playable(clip)
     global armed, started
     c = obs()
     if c.get_current_program_scene().current_program_scene_name != SCENE:
         raise ValueError("Put Video Rundown on Program before playing a clip.")
+    if not rundown_ready(c):
+        state["ready"] = False
+        raise ValueError("Set up the Video Rundown scene and its media source first.")
     log_playback("Replaced")
     armed = False
     state.update(return_ready=False, handoff="")
     c.set_input_settings(SOURCE, {
-        "is_local_file": True, "local_file": clip["path"], "looping": False,
+        "is_local_file": True, "local_file": item["path"], "looping": False,
         "restart_on_activate": False, "close_when_inactive": False,
         "clear_on_media_end": True,
     }, True)
@@ -431,7 +1621,13 @@ def cut_to_preview():
 
 
 def next_pending(after=-1):
-    return next((clip for clip in QUEUE[after + 1:] if not clip.get("played") and not clip.get("marker")), None)
+    return next((clip for clip in QUEUE[after + 1:] if not clip.get("played") and not clip.get("marker")
+                 and media_status(media_item(clip)) == "ready"), None)
+
+
+def next_to_play(after=-1):
+    clip = find_clip(state.get("next_cue"))
+    return clip if clip and media_status(media_item(clip)) == "ready" else next_pending(after)
 
 
 def finish_clip():
@@ -470,7 +1666,7 @@ def start_on_program(previous, current):
         return
     if state["current"] and state["status"] not in {"Idle", "Ended", "Stopped", "Error"}:
         return
-    clip = find_clip(state.get("next_cue")) or next_pending()
+    clip = next_to_play()
     if clip:
         try:
             play(clip)
@@ -490,9 +1686,13 @@ def poll():
                 scenes = c.get_scene_list()
                 state["program"] = scenes.current_program_scene_name == SCENE
                 state["preview"] = scenes.current_preview_scene_name
-                if not state["ready"] and any(item["sceneName"] == SCENE for item in scenes.scenes):
-                    state["ready"] = any(item["sourceName"] == SOURCE
-                                         for item in c.get_scene_item_list(SCENE).scene_items)
+                if not any(item["sceneName"] == SCENE for item in scenes.scenes):
+                    state.update(ready=False, setup_existing=False)
+                elif not state["ready"] or (state["program"] and previous_program != SCENE):
+                    items = c.get_scene_item_list(SCENE).scene_items
+                    source = rundown_input(c, items)
+                    ready = source is not None and source.get(RUNDOWN_OWNER) is True
+                    state.update(ready=ready, setup_existing=not ready and source is not None)
                 if not state["program"]:
                     state["return_ready"] = False
                 last_program = previous_program
@@ -552,13 +1752,17 @@ def action(data):
     cmd = data.get("action")
     if cmd == "restore_backup":
         name = data.get("name", "")
-        if not isinstance(name, str) or name not in {item["name"] for item in list_backups() if item["name"].endswith(".sqlite")}:
-            raise ValueError("Select a SQLite backup from the Backups tab.")
-        restore_backup(BACKUPS / name)
+        if not isinstance(name, str) or name not in {item["name"] for item in list_backups() if item["name"].endswith((".sqlite", ".json"))}:
+            raise ValueError("Select a rundown backup from the Backups tab.")
+        restore_backup(BACKUPS / name, legacy=name.endswith(".sqlite"))
         return
     if cmd == "cue":
         clip = find_clip(data.get("id"))
-        cue(clip["id"] if clip and not clip.get("marker") else None)
+        if clip and not clip.get("marker"):
+            require_playable(clip)
+            cue(clip["id"])
+        else:
+            cue(None)
         return
     if cmd == "duration":
         clip = LIBRARY.get(data.get("id"))
@@ -571,6 +1775,7 @@ def action(data):
         item = LIBRARY.get(data.get("id"))
         if not item or item.get("removed"):
             raise ValueError("Select an active file from the library.")
+        require_playable(item)
         clip = dict(item, id=uuid.uuid4().hex, media_id=item["id"], played=False)
         target = next((i for i, row in enumerate(QUEUE) if row["id"] == data.get("target")), len(QUEUE))
         position = min(len(QUEUE), target + (1 if data.get("after") is True else 0))
@@ -578,12 +1783,19 @@ def action(data):
         save_queue()
         return
     if cmd in {"remove_media", "restore_media", "trash_media"}:
+        if FILE_OPERATION.get("status") == "running" and FILE_OPERATION.get("clip") == data.get("id"):
+            raise ValueError("Wait for the file operation to finish.")
         item = LIBRARY.get(data.get("id"))
         if not item or bool(item.get("removed")) != (cmd != "remove_media"):
             raise ValueError("This clip has already been moved or removed.")
         if any(row.get("media_id", row["id"]) == item["id"] for row in QUEUE if not row.get("marker")):
             raise ValueError("Remove this clip from the Playlist before removing it from the library.")
-        if cmd == "trash_media":
+        if cmd == "trash_media" and item.get("linked"):
+            updated = LIBRARY.copy()
+            del updated[item["id"]]
+            save_json(LIBRARY_FILE, updated)
+            del LIBRARY[item["id"]]
+        elif cmd == "trash_media":
             try:
                 from send2trash import send2trash
                 send2trash(item["path"])
@@ -602,77 +1814,8 @@ def action(data):
         if cmd == "remove_media" and state.get("cue") == item["id"]:
             cue(None)
         return
-    if cmd in {"rename_category", "delete_category"}:
-        old_name = data.get("category")
-        if old_name not in CATEGORIES:
-            raise ValueError("This category no longer exists.")
-        new_name = category_name(data.get("title")) if cmd == "rename_category" else None
-        if new_name and any(name != old_name and name.casefold() == new_name.casefold() for name in CATEGORIES):
-            raise ValueError("A category with that name already exists.")
-        updated_names = [name if name != old_name else new_name for name in CATEGORIES
-                         if name != old_name or new_name is not None]
-        updated_library = {}
-        for clip_id, clip in LIBRARY.items():
-            names = clip.get("categories", [])
-            if any(name.casefold() == old_name.casefold() for name in names):
-                updated = [name for name in names if name.casefold() != old_name.casefold()]
-                if new_name is not None:
-                    updated.append(new_name)
-                clip = dict(clip, categories=updated)
-            updated_library[clip_id] = clip
-        save_json(CATEGORIES_FILE, updated_names)
-        try:
-            save_json(LIBRARY_FILE, updated_library)
-        except OSError:
-            save_json(CATEGORIES_FILE, CATEGORIES)
-            raise
-        CATEGORIES[:] = updated_names
-        LIBRARY.update(updated_library)
-        return
-    if cmd in {"create_category", "add_category", "remove_category"}:
-        name = category_name(data.get("category"))
-        names = [*CATEGORIES, *(category for clip in LIBRARY.values() for category in clip.get("categories", []))]
-        matching = next((category for category in names if category.casefold() == name.casefold()), name)
-        if cmd == "create_category":
-            register_categories([matching])
-            return
-        item = LIBRARY.get(data.get("id"))
-        if not item or item.get("removed"):
-            raise ValueError("Select an active clip from the File Library.")
-        previous = item.get("categories", [])
-        categories = [category for category in previous if category.casefold() != matching.casefold()]
-        if cmd == "add_category":
-            register_categories([matching])
-            categories.append(matching)
-        elif len(categories) != len(previous):
-            register_categories([matching])
-        item["categories"] = categories
-        try:
-            save_json(LIBRARY_FILE, LIBRARY)
-        except OSError:
-            item["categories"] = previous
-            raise
-        return
-    if cmd == "rename":
-        clip = LIBRARY.get(data.get("id"))
-        if clip is None:
-            raise ValueError("Select a file from the library.")
-        title = data.get("title")
-        if not isinstance(title, str) or not 1 <= len(title.strip()) <= 160 or any(ord(char) < 32 for char in title):
-            raise ValueError("Enter a clip name between 1 and 160 characters.")
-        previous = clip.get("title")
-        clip["title"] = title.strip()
-        try:
-            save_json(LIBRARY_FILE, LIBRARY)
-        except OSError:
-            if previous is None:
-                del clip["title"]
-            else:
-                clip["title"] = previous
-            raise
-        return
     if cmd == "setup":
-        setup()
+        setup(adopt_existing=data.get("adopt_existing") is True)
         return
     if cmd in {"auto", "auto_cut"}:
         value = bool(data.get("value")) if cmd == "auto" else data.get("value")
@@ -731,8 +1874,7 @@ def action(data):
             state.update(current=None, status="Stopped", cursor=0, duration=0, return_ready=False)
         return
     if cmd == "next":
-        clip = find_clip(state.get("next_cue")) if state.get("next_cue") else None
-        clip = clip or next_pending(current_index())
+        clip = next_to_play(current_index())
         if not clip:
             raise ValueError("End of the rundown.")
         play(clip)
@@ -785,8 +1927,9 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             clip = find_clip(clip_id)
             try:
-                stream = Path(clip["path"]).open("rb") if clip and not clip.get("marker") else None
-            except OSError:
+                stream = (Path(require_playable(clip)["path"]).open("rb")
+                          if clip and not clip.get("marker") else None)
+            except (OSError, ValueError):
                 stream = None
         if stream is None:
             self.reply(404, "{}")
@@ -874,9 +2017,27 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 self.reply(200, json.dumps({"folder": str(BACKUPS), "files": list_backups()}))
         elif self.path == "/state":
+            show_paths = hmac.compare_digest(self.headers.get("X-Rundown", ""), TOKEN)
             with LOCK:
                 clips = [public_clip(clip) for clip in QUEUE]
-                self.reply(200, json.dumps(dict(state, queue=clips, categories=CATEGORIES, library=[dict(public_clip(item), categories=item.get("categories", []), missing=not Path(item["path"]).is_file(), original_name=item["name"], metadata={"format": Path(item["name"]).suffix[1:].upper(), **(item.get("metadata") or {})}) for item in LIBRARY.values() if not item.get("removed")], removed=[dict(public_clip(item), missing=not Path(item["path"]).is_file(), original_name=item["name"]) for item in LIBRARY.values() if item.get("removed")], history=HISTORY, sample_age_ms=max(0, (time.monotonic() - sampled_at) * 1000) if sampled_at else 0)))
+                library, removed = [], []
+                roots = explorer_roots() if show_paths else []
+                for item in LIBRARY.values():
+                    if item.get("removed"):
+                        removed.append(public_library_clip(item, show_path=show_paths))
+                    else:
+                        library.append(public_library_clip(item, show_path=show_paths, roots=roots))
+                self.reply(200, json.dumps(dict(
+                    state, queue=clips, library=library, removed=removed,
+                    folders=[{"path": str(root), "name": root.name or str(root), "registered": str(root) in FOLDERS}
+                             for root in roots],
+                    favorites=favorite_entries(roots) if show_paths else [],
+                    file_operation=FILE_OPERATION if show_paths else {},
+                    renames=[{"id": clip_id, "old_path": item["path"], "new_path": str(path)}
+                             for clip_id, (item, path, _) in RENAME_SUGGESTIONS.items()] if show_paths else [],
+                    history=HISTORY,
+                    sample_age_ms=max(0, (time.monotonic() - sampled_at) * 1000) if sampled_at else 0,
+                )))
         else:
             self.reply(404, "{}")
 
@@ -893,25 +2054,105 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if self.path == "/restore-upload":
                 if not 0 < length <= 64 * 1024**2:
-                    raise ValueError("Select a SQLite backup up to 64 MB.")
+                    raise ValueError("Select a rundown backup up to 64 MB.")
                 payload = self.rfile.read(length)
-                if len(payload) != length or not payload.startswith(b"SQLite format 3\x00"):
-                    raise ValueError("Select a complete SQLite backup.")
+                if len(payload) != length:
+                    raise ValueError("Select a complete rundown backup.")
+                legacy = payload.startswith(b"SQLite format 3\x00")
+                extension = ".sqlite" if legacy else ".json"
                 BACKUPS.mkdir(exist_ok=True)
                 temporary = BACKUPS / ("restore-" + uuid.uuid4().hex + ".tmp")
                 try:
                     temporary.write_bytes(payload)
                     with LOCK:
-                        restore_backup(temporary)
-                        temporary.replace(BACKUPS / ("rundown-imported-" + uuid.uuid4().hex[:12] + ".sqlite"))
+                        restore_backup(temporary, legacy=legacy)
+                        temporary.replace(BACKUPS / ("rundown-imported-" + uuid.uuid4().hex[:12] + extension))
                 finally:
                     temporary.unlink(missing_ok=True)
+            elif self.path in {"/favorite-folder", "/file-operation", "/pick-file-destination", "/link-file"} and 0 < length <= 8192:
+                data = json.loads(self.rfile.read(length))
+                if self.path == "/favorite-folder":
+                    set_favorite(data)
+                    result = {}
+                elif self.path == "/file-operation":
+                    result = start_file_operation(data)
+                elif self.path == "/pick-file-destination":
+                    clip_id = data.get("id")
+                    with LOCK:
+                        item = LIBRARY.get(clip_id) if isinstance(clip_id, str) else None
+                        if not item:
+                            raise ValueError("Select a clip before choosing a destination.")
+                        parent = Path(item["path"]).parent
+                    result = {"path": choose_link_path(
+                        "Choose a destination folder", folder_only=True,
+                        initial_folder=parent if parent.is_dir() else None,
+                    )}
+                else:
+                    name = data.get("name", "")
+                    name = "".join(char for char in name[:160] if char.isprintable()) if isinstance(name, str) else ""
+                    label = "Link video" + (" - " + name if name else "")
+                    path = choose_link_path(label, folder=False, drop_file=True)
+                    result = link_single_file(path) if path else {"cancelled": True}
+                self.reply(200, json.dumps(result))
+                return
+            elif self.path == "/confirm-file-rename" and 0 < length <= 8192:
+                data = json.loads(self.rfile.read(length))
+                confirm_external_rename(data.get("id"), data.get("path"))
+            elif self.path in {"/browse-folder", "/register-folder", "/refresh-folder", "/rename-folder"} and 0 < length <= 8192:
+                data = json.loads(self.rfile.read(length))
+                root, parts = data.get("root"), data.get("parts")
+                if self.path == "/browse-folder":
+                    result = browse_folder(root, parts)
+                elif self.path == "/register-folder":
+                    result = register_saved_folder(root)
+                elif self.path == "/refresh-folder":
+                    if not isinstance(parts, list):
+                        raise ValueError("Select a linked folder.")
+                    result = import_folder(root, parts=parts)
+                else:
+                    result = rename_linked_folder(root, parts, data.get("name"))
+                self.reply(200, json.dumps(result))
+                return
+            elif self.path in {"/link-folder", "/locate-linked"} and 0 < length <= 8192:
+                data = json.loads(self.rfile.read(length))
+                if self.path == "/link-folder":
+                    name = data.get("name", "")
+                    name = "".join(char for char in name[:180] if char.isprintable()) if isinstance(name, str) else ""
+                    label = f"Link folder: {name}" if name else ""
+                    path = choose_link_path(label)
+                    result = import_folder(path) if path else {"cancelled": True}
+                else:
+                    clip_id = data.get("id")
+                    with LOCK:
+                        item = LIBRARY.get(clip_id)
+                        if not item or not item.get("linked") or media_status(item) != "missing":
+                            raise ValueError("Select a missing linked clip.")
+                    chosen = choose_link_path("Reconnect linked video", folder=False)
+                    if not chosen:
+                        self.reply(200, json.dumps({"cancelled": True}))
+                        return
+                    path = local_path(chosen).resolve()
+                    stamp = file_stamp(path)
+                    if stamp is None or path.is_relative_to(CACHE):
+                        raise ValueError("Choose an available video outside the rundown cache.")
+                    record = verify_video(dict(item, path=str(path), name=path.name), stamp)
+                    if record["unsupported"]:
+                        raise ValueError(record["unsupported"])
+                    with LOCK:
+                        if LIBRARY.get(clip_id) is not item or media_status(item) != "missing":
+                            raise ValueError("The selected clip changed. Try again.")
+                        updated = {**LIBRARY, clip_id: record}
+                        save_json(LIBRARY_FILE, updated)
+                        LIBRARY[clip_id] = record
+                    result = {}
+                self.reply(200, json.dumps(result))
+                return
             elif self.path == "/relink":
                 clip_id = self.headers.get("X-Clip-ID", "")
                 name = unquote(self.headers.get("X-Clip-Name", ""))
                 with LOCK:
                     item = LIBRARY.get(clip_id)
-                    if not item or Path(item["path"]).exists():
+                    if not item or item.get("linked") or Path(item["path"]).exists():
                         raise ValueError("The selected clip is no longer missing.")
                     path = Path(item["path"])
                 if Path(name).suffix.lower() != path.suffix.lower() or not 0 < length <= 4 * 1024**3:
@@ -960,9 +2201,9 @@ class Handler(BaseHTTPRequestHandler):
                         item["source_modified_at"] = int(modified) / 1000
                     LIBRARY[clip_id] = item
                     save_json(LIBRARY_FILE, LIBRARY)
-            elif self.path in {"/export-csv", "/backup-sqlite"}:
+            elif self.path in {"/export-csv", "/backup-json"}:
                 with LOCK:
-                    item = create_backup("csv" if self.path == "/export-csv" else "sqlite")
+                    item = create_backup("csv" if self.path == "/export-csv" else "json")
                 self.reply(200, json.dumps(item))
                 return
             elif self.path == "/action" and 0 < length <= 8192:
@@ -981,13 +2222,35 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def main():
+def main(stop=None):
+    with ThreadingHTTPServer(("127.0.0.1", 46643), Handler) as server:
+        load_rundown()
+        threading.Thread(target=poll, daemon=True).start()
+        threading.Thread(target=scan_library_metadata, daemon=True).start()
+        threading.Thread(target=watch_folder_changes, daemon=True).start()
+        print("OBS Video Rundown running at " + ORIGIN, flush=True)
+        if stop is None:
+            server.serve_forever()
+        else:
+            server.timeout = 0.25
+            while not stop.is_set():
+                server.handle_request()
+
+
+def load_rundown():
     CACHE.mkdir(exist_ok=True)
     if LIBRARY_FILE.exists():
         for media_id, item in json.loads(LIBRARY_FILE.read_text(encoding="utf-8")).items():
-            path = CACHE / (media_id + Path(item["name"]).suffix.lower())
+            path = (local_path(item["path"]) if item.get("linked")
+                    else cache_path(media_id, item))
             if re.fullmatch(r"[a-f0-9]{32}", media_id):
                 LIBRARY[media_id] = dict(item, id=media_id, path=str(path))
+    if FOLDERS_FILE.exists():
+        FOLDERS[:] = saved_roots(json.loads(FOLDERS_FILE.read_bytes()))
+    if FAVORITES_FILE.exists():
+        FAVORITES[:] = saved_roots(json.loads(FAVORITES_FILE.read_bytes()))
+    recover_folder_rename()
+    recover_file_change()
     if QUEUE_FILE.exists():
         for clip in json.loads(QUEUE_FILE.read_text(encoding="utf-8")):
             if clip.get("marker"):
@@ -1005,11 +2268,6 @@ def main():
         CATEGORIES.extend(json.loads(CATEGORIES_FILE.read_text(encoding="utf-8")))
     register_categories(category for clip in LIBRARY.values() for category in clip.get("categories", []))
     restore_preferences_and_history()
-    with ThreadingHTTPServer(("127.0.0.1", 46643), Handler) as server:
-        threading.Thread(target=poll, daemon=True).start()
-        threading.Thread(target=scan_library_metadata, daemon=True).start()
-        print("OBS Video Rundown running at " + ORIGIN, flush=True)
-        server.serve_forever()
 
 
 if __name__ == "__main__":

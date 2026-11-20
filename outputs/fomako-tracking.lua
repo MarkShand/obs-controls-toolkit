@@ -16,11 +16,6 @@ local pending
 local toggle_hotkey
 local tracking_enabled = false
 
-local function save_setup()
-    obs.timer_remove(save_setup)
-    obs.obs_frontend_save()
-end
-
 ffi.cdef[[
 typedef struct {
     unsigned char length, family;
@@ -35,13 +30,8 @@ long send(int fd, const void *data, unsigned long len, int flags);
 long recv(int fd, void *data, unsigned long len, int flags);
 unsigned short htons(unsigned short value);
 int inet_pton(int family, const char *src, void *dst);
-typedef bool (*fomako_hotkey_enum)(void *, size_t, void *);
-void obs_enum_hotkeys(fomako_hotkey_enum callback, void *data);
-const char *obs_hotkey_get_name(const void *hotkey);
-void obs_hotkey_load(size_t id, void *bindings);
 ]]
 local net = ffi.C
-local libobs = windows and ffi.load("obs") or ffi.load("/Applications/OBS.app/Contents/Frameworks/libobs.framework/Versions/A/libobs")
 local msg_dontwait = 0x80 -- Darwin
 local eagain = 35 -- Darwin
 local socket_error = ffi.errno
@@ -104,10 +94,12 @@ local function log(level, message)
     obs.script_log(level, "FoMaKo Camera 1: " .. message)
 end
 
+local windows_toast
 local function show_confirmation(label)
     if not show_tracking_toast then return end
     if windows then
-        os.execute('start "" /b pythonw "' .. runtime() .. 'hotkey-toast.py" ' .. label)
+        windows_toast = windows_toast or dofile(runtime() .. "windows-toast.lua")
+        windows_toast(runtime(), label)
         return
     end
     local executable = runtime() .. "tracking-toast"
@@ -262,24 +254,6 @@ function script_update(settings)
     show_tracking_toast = obs.obs_data_get_bool(settings, "show_tracking_toast")
 end
 
-local function clear_legacy_shortcuts()
-    obs.timer_remove(clear_legacy_shortcuts)
-    local ids = {}
-    local collect = ffi.cast("fomako_hotkey_enum", function(_, id, hotkey)
-        local name = ffi.string(libobs.obs_hotkey_get_name(hotkey))
-        if name == "ml_ptz_at_on_active" or name == "ml_ptz_at_off_active" then
-            ids[#ids + 1] = id
-        end
-        return true
-    end)
-    libobs.obs_enum_hotkeys(collect, nil)
-    collect:free()
-    for _, id in ipairs(ids) do
-        libobs.obs_hotkey_load(id, nil)
-    end
-    obs.timer_add(save_setup, 350)
-end
-
 function script_load(settings)
     publish_tracking_state()
     toggle_hotkey = obs.obs_hotkey_register_frontend(
@@ -299,12 +273,9 @@ function script_load(settings)
     end
     obs.obs_hotkey_load(toggle_hotkey, bindings)
     obs.obs_data_array_release(bindings)
-    obs.timer_add(clear_legacy_shortcuts, 500)
 end
 
 function script_save(settings)
-    obs.obs_data_unset_user_value(settings, "fomako_tracking_on")
-    obs.obs_data_unset_user_value(settings, "fomako_tracking_off")
     local bindings = obs.obs_hotkey_save(toggle_hotkey)
     obs.obs_data_set_array(settings, "fomako_tracking_toggle", bindings)
     obs.obs_data_array_release(bindings)
@@ -313,8 +284,6 @@ end
 function script_unload()
     os.remove(runtime() .. "tracking-active.state")
     stop_pending()
-    obs.timer_remove(save_setup)
-    obs.timer_remove(clear_legacy_shortcuts)
     if toggle_hotkey then obs.obs_hotkey_unregister(toggle_hotkey) end
     if windows then net.cleanup() end
 end

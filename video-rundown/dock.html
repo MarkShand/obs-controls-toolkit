@@ -17,51 +17,92 @@ progress{width:100%;height:6px;accent-color:#64d1b1}.transport{flex-wrap:wrap;ma
 #drop{padding:14px 8px;text-align:center;border:1px dashed #586d8c;border-radius:8px;margin:9px 0;color:#bbd5fa}
 #drop.drag{border-color:#69d8bc;background:#203c39}#drop button{margin-left:5px}
 #library-filters{display:flex;flex-wrap:wrap;gap:6px}
-#library-filters select{max-width:100%;min-width:0}
-#library-search{flex:1 1 125px;width:100%;min-width:0;color:inherit;background:#202631;border:1px solid #536886;border-radius:6px;padding:7px 9px}
-#library .clip,#removed .clip,#category-clips .clip{gap:5px}.library-number{min-width:2ch;text-align:right;color:#b7c5d6;font-variant-numeric:tabular-nums}#library .clip[hidden]{display:none}#library-no-results{color:#b7c5d6}
-.rename{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:5px}.rename input{flex:1;min-width:90px;color:inherit;background:#14171e;border:1px solid #536886;border-radius:5px;padding:5px}
+#library-filters select,#folder-root,#file-destination{max-width:100%;min-width:0}
+#folder-tools,#folder-breadcrumb{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+
+#folder-root{flex:1 1 140px}
+#folder-breadcrumb button,#folder-children button{overflow-wrap:anywhere;text-align:left}
+#folder-children li{margin:4px 0}
+#folder-children button{width:100%}
+#folder-message,#folder-rename-error,#file-rename-notice{overflow-wrap:anywhere}
+#file-rename-notice:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid #5d7089;border-radius:6px}
+#file-rename-notice span{flex:1 1 165px}
+#folder-rename-error:empty{display:none}
+#folder-star[aria-pressed=true]{color:#ffd280}
+#favorites-list{list-style:none;padding:0;margin:8px 0}
+.favorite-folder{display:flex;align-items:flex-start;gap:6px;margin:6px 0}
+.favorite-folder details{flex:1;min-width:0}
+.favorite-folder summary{cursor:pointer;background:#202631;border:1px solid #43546d;border-radius:6px;padding:7px;overflow-wrap:anywhere}
+.favorite-folder details[open] > summary{border-color:#76d4ba}
+.favorite-folder summary{list-style:none}
+.favorite-folder summary::-webkit-details-marker{display:none}
+.favorite-folder summary::before{content:"›";display:inline-block;margin-inline-end:7px;color:#9bb6dc}
+.favorite-folder details[open] > summary::before{transform:rotate(90deg)}
+.favorite-subfolders{list-style:none;margin:6px 0;padding:0 0 0 10px;border-inline-start:1px solid #43546d}
+.favorite-subfolders > li{margin:5px 0}
+.breadcrumb-chevron{align-self:center;color:#9bb6dc;padding-inline:2px}
+.folder-child{display:flex;align-items:center;gap:8px}
+.folder-child-arrow{color:#9bb6dc}
+#file-change-dialog{box-sizing:border-box;width:100vw;max-width:none;height:100vh;height:100dvh;max-height:none;margin:0;border:0;padding:16px;background:#171d28;color:#edf2f8;overflow:auto}
+#file-change-dialog::backdrop{background:#080b12d0}
+#file-change-dialog h2{margin:0}
+#file-change-list li{padding:10px 0;border-top:1px solid #43546d;overflow-wrap:anywhere}
+#file-change-list p{margin:4px 0;font-size:12px}
+#file-change-message{overflow-wrap:anywhere}
+.favorite-path{display:block;margin-top:3px;overflow-wrap:anywhere}
+.favorite-folder .clip{gap:5px}
+.favorite-folder-empty{color:#b7c5d6;overflow-wrap:anywhere}
+#file-transfer:not([hidden]){display:grid;gap:4px;margin:6px 0}
+#file-transfer progress{height:8px}
+#file-destination-path{overflow-wrap:anywhere}
+#library-search,#favorites-search{flex:1 1 125px;width:100%;min-width:0;color:inherit;background:#202631;border:1px solid #536886;border-radius:6px;padding:7px 9px}
+#library .clip,#removed .clip,#folder-clips .clip{gap:5px}.library-number{min-width:2ch;text-align:right;color:#b7c5d6;font-variant-numeric:tabular-nums}#library .clip[hidden]{display:none}#library-no-results{color:#b7c5d6}
 ol{padding:0;margin:6px 0 0;list-style:none}.clip{padding:5px 0;border-top:1px solid #30394a}
 .clip .pick{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .clip button[aria-current=true]{border-color:#76d4ba;color:#a8f1dc}.clip .icon{padding:5px 7px}.clip .grip{cursor:grab;color:#aebed3;touch-action:none}.clip .grip:active{cursor:grabbing}.clip.drop-before{box-shadow:inset 0 2px #76d4ba}.clip.drop-after{box-shadow:inset 0 -2px #76d4ba}
 .clip.on-air{background:#3d2530;border-top-color:#824353;border-left:3px solid #fa6b7f;padding-left:5px}
 .clip.on-air .pick{border-color:#bd586c;color:#ffe5e9}
 .clip.marker{color:#ffd395;background:#382f23}.marker-label{flex:1;font-size:12px}.air-label{color:#ffc0cb;font-size:10px;font-weight:700;white-space:nowrap}
-#rundown-tabs{display:flex;gap:6px;margin:9px 0;overflow-x:auto;scrollbar-width:thin;padding:2px}
-#rundown-tabs button{flex:none;white-space:nowrap}#rundown-tabs button[draggable=true]{cursor:grab}
+#tab-strip{display:flex;align-items:stretch;gap:2px;margin:8px 0;min-width:0}
+#rundown-tabs{display:flex;flex:1;min-width:0;gap:2px;overflow-x:auto;scrollbar-width:none;padding:2px}
+#rundown-tabs::-webkit-scrollbar{display:none}
+#rundown-tabs button,#tab-strip .tab-arrow{flex:none;white-space:nowrap;padding:4px 7px;font-size:12px;border-radius:4px}
+#tab-strip .tab-arrow{padding-inline:5px}#rundown-tabs button[draggable=true]{cursor:grab}
 #rundown-tabs button.tab-dragging{opacity:.5}nav button[aria-pressed=true]{border-color:#76d4ba;color:#a8f1dc}
 select{font:inherit;color:inherit;background:#293445;border:1px solid #43546d;border-radius:6px;padding:5px}
 .airtime{font-size:10px;color:#adbbcd;white-space:nowrap}.clip .pick{display:grid}.clip .pick strong{overflow:hidden;text-overflow:ellipsis;font-weight:500}
 #library-menu,#row-menu{position:fixed;z-index:3;padding:4px;background:#202631;border:1px solid #43546d;border-radius:6px}
 #library-menu button{display:block;width:100%;text-align:left}#library-menu button[hidden]{display:none}#library-menu button+button{margin-top:4px}
 a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
-#playlist-toast{position:fixed;z-index:4;bottom:14px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);padding:8px 12px;border:1px solid #4d9c88;border-radius:8px;background:#223b35;color:#e0fff3;overflow-wrap:anywhere;pointer-events:none}
+#action-toast{position:fixed;z-index:4;bottom:14px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);padding:8px 12px;border:1px solid #4d9c88;border-radius:8px;background:#223b35;color:#e0fff3;overflow-wrap:anywhere;pointer-events:none}
 #message{min-height:1.4em;margin:7px 0 0;overflow-wrap:anywhere}
  .clip-action{flex:none;display:inline-grid;place-items:center;width:30px;height:30px;padding:0;font-size:16px;line-height:1}
 .clip-title{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .clip-title > span{display:inline-block;vertical-align:bottom}
 #removed .clip-title{flex:1}
-.clip-metadata{color:#b7c5d6;font-size:10px;white-space:normal;overflow-wrap:anywhere}
+.clip-metadata,.clip-path{color:#b7c5d6;font-size:10px;white-space:normal;overflow-wrap:anywhere}
+.clip-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .clip-title.scrolling{text-overflow:clip}
 .clip-title.scrolling > span{animation:clip-scroll var(--scroll-time) linear infinite alternate}
 @keyframes clip-scroll{0%,12%{transform:translateX(0)}88%,100%{transform:translateX(var(--scroll-distance))}}
 @media(prefers-reduced-motion:reduce){.clip-title.scrolling > span{animation:none}}
-#confirm-dialog,#category-dialog{box-sizing:border-box;width:min(380px,calc(100% - 24px));max-height:calc(100% - 24px);padding:0;border:1px solid #445268;border-radius:18px;background:#202631;color:#edf2f8;box-shadow:0 20px 56px #05070ba6}
-#confirm-dialog::backdrop,#category-dialog::backdrop{background:#080b12a8;backdrop-filter:blur(3px)}
-#confirm-dialog[open],#category-dialog[open]{animation:category-enter 160ms ease-out}
-@keyframes category-enter{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
-@media(prefers-reduced-motion:reduce){#confirm-dialog[open],#category-dialog[open]{animation:none}}
-#confirm-form,#category-form{display:grid;gap:9px;padding:19px}
-#confirm-title,#category-dialog-title{font-size:17px;color:inherit}
-#category-form label{margin-top:4px;color:#c4d2e4;font-size:12px}
-#category-name{width:100%;min-width:0;padding:9px 11px;color:inherit;background:#161b24;border:1px solid #52647e;border-radius:10px}
-#category-name:focus{outline:2px solid #75d7bd;outline-offset:1px}
-#category-existing{width:100%;padding:9px 11px;border-radius:10px}
-.category-actions #category-create-new{margin-right:auto}
-.category-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:5px}
-.category-actions button{border-radius:9px;padding:7px 13px}
-#category-status{margin:0;color:#ffc0c8;overflow-wrap:anywhere}
-#category-status:empty{display:none}
+#confirm-dialog,#file-dialog,#path-dialog,#folder-rename-dialog{box-sizing:border-box;width:min(380px,calc(100% - 24px));max-height:calc(100% - 24px);padding:0;border:1px solid #445268;border-radius:18px;background:#202631;color:#edf2f8;box-shadow:0 20px 56px #05070ba6}
+#confirm-dialog::backdrop,#file-dialog::backdrop,#path-dialog::backdrop,#folder-rename-dialog::backdrop{background:#080b12a8;backdrop-filter:blur(3px)}
+#confirm-dialog[open],#file-dialog[open]{animation:dialog-enter 160ms ease-out}
+@keyframes dialog-enter{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){#confirm-dialog[open],#file-dialog[open]{animation:none}}
+#confirm-form,#file-form,#path-form,#folder-rename-form{display:grid;gap:9px;padding:19px}
+#confirm-title,#file-dialog-title,#path-title,#folder-rename-title{font-size:17px;color:inherit}
+#file-form label{margin-top:4px;color:#c4d2e4;font-size:12px}
+#path-text{box-sizing:border-box;resize:vertical;font:inherit}
+#file-name,#path-text,#folder-rename-name{width:100%;min-width:0;padding:9px 11px;color:inherit;background:#161b24;border:1px solid #52647e;border-radius:10px}
+#file-name:focus{outline:2px solid #75d7bd;outline-offset:1px}
+#file-destination{width:100%;padding:7px}
+
+.dialog-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:5px}
+.dialog-actions button{border-radius:9px;padding:7px 13px}
+#file-dialog-status{margin:0;color:#ffc0c8;overflow-wrap:anywhere}
+#file-dialog-status:empty{display:none}
 </style>
 <body><main>
 <header><h1>Video Rundown</h1><span class="badge" id="program">Connecting</span></header>
@@ -77,38 +118,74 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
 <button id="cut" disabled>Cut to Preview</button>
 </div>
 <small id="cut-target"></small></section>
-<nav id="rundown-tabs" aria-label="Rundown views"><button id="tab-queue">Playlist</button><button id="tab-library">File Library</button><button id="tab-categories">Categories</button><button id="tab-removed">Removed Videos</button><button id="tab-history">History</button><button id="tab-backups">Backups</button></nav>
+<div id="tab-strip">
+<button id="tabs-left" class="tab-arrow" type="button" aria-label="Scroll tabs left">‹</button>
+<nav id="rundown-tabs" aria-label="Rundown views"><button id="tab-queue">Playlist</button><button id="tab-library">File Library</button><button id="tab-folders">Folders</button><button id="tab-favorites">Favorites</button><button id="tab-removed">Removed Videos</button><button id="tab-history">History</button><button id="tab-backups">Backups</button></nav>
+<button id="tabs-right" class="tab-arrow" type="button" aria-label="Scroll tabs right">›</button>
+</div>
+<div id="file-rename-notice" hidden><span id="file-rename-summary" role="status"></span>
+<button id="file-rename-review" type="button">Review changes</button></div>
+<dialog id="file-change-dialog" aria-labelledby="file-change-title">
+<div class="bar"><h2 id="file-change-title">Review file changes</h2>
+<form method="dialog"><button type="submit">Close</button></form></div>
+<p>Reconnect a clip when the new path belongs to the same video. Playlist entries are kept.</p>
+<p id="file-change-message" role="status"></p>
+<ol id="file-change-list"></ol>
+</dialog>
 <section id="pane-queue"><div class="bar"><h2>PLAYLIST</h2><small id="count"></small></div>
 <ol id="queue"></ol><p id="queue-drop">Drop a library file here to add it.</p></section>
-<section id="pane-library" hidden><div id="drop">Drop video files here <button id="browse">Add files</button>
+<section id="pane-library" hidden><div id="drop">Drop a video or folder here <button id="link-folder">Link folder</button> <button id="link-file">Link file</button> <button id="browse">Upload copies</button>
 <input id="files" type="file" accept=".mp4,.ts,.mov,.flv,.mkv,.avi,.gif,.webm" multiple hidden></div>
+<p id="folder-result" role="status" hidden></p>
+
 <div id="library-filters">
 <input id="library-search" type="search" placeholder="Search clip names…" aria-label="Search File Library" aria-controls="library">
-<select id="library-category-filter" aria-label="Filter by category" aria-controls="library"><option value="">All categories</option></select>
-<select id="library-search-mode" aria-label="Search by" aria-controls="library"><option value="name">By clip name</option><option value="category">By category name</option></select>
 </div>
 <p id="metadata-upgrade" hidden>Restart the Video Rundown launcher to load full clip details.</p>
 <p id="library-no-results" role="status" hidden>No clips match your search.</p>
 <ol id="library"></ol></section>
-<section id="pane-categories" hidden>
-<div class="bar">
-<label>Category <select id="category-select"></select></label>
-<div><button type="button" id="category-new">New Category</button>
-<button type="button" id="category-rename" title="Rename category" aria-label="Rename category" disabled>✎</button>
-<button type="button" id="category-delete" title="Delete category" aria-label="Delete category" disabled>🗑︎</button></div>
+<section id="pane-folders" hidden><section id="folder-explorer" aria-label="Folder Explorer">
+<div id="folder-tools"><select id="folder-root" aria-label="Linked folder"></select>
+<button id="folder-link-root" type="button">Link folder</button>
+<button id="folder-register" type="button" hidden>Use this folder</button>
+<button id="folder-refresh" type="button">Refresh folder</button>
+<button id="folder-star" type="button" aria-pressed="false" hidden>☆ Star folder</button>
+<button id="folder-rename" type="button">Rename folder on drive</button></div>
+<nav id="folder-breadcrumb" aria-label="Current folder"></nav>
+<p id="folder-message" role="status" hidden></p>
+<ul id="folder-children"></ul>
+</section>
+<dialog id="folder-rename-dialog" aria-labelledby="folder-rename-title"><form id="folder-rename-form">
+<h2 id="folder-rename-title">Rename folder on drive</h2>
+<label for="folder-rename-name">New folder name</label>
+<input id="folder-rename-name" maxlength="255" required>
+<small>This renames the folder on disk and updates Video Rundown’s links. Other apps may still use the old path.</small>
+<p id="folder-rename-error" role="status"></p>
+<div class="dialog-actions"><button id="folder-rename-cancel" type="button">Cancel</button>
+<button id="folder-rename-submit" type="submit" class="primary">Rename folder</button></div>
+</form></dialog>
+
+<p id="folder-empty" role="status" hidden>No library clips in this folder. Refresh to scan for new videos.</p>
+<ol id="folder-clips"></ol></section>
+<section id="pane-favorites" hidden>
+<input id="favorites-search" type="search" placeholder="Search folders or clips…" aria-label="Search Favorites" aria-controls="favorites-list">
+<p id="favorites-no-results" role="status" hidden>No favorite folders or clips match your search.</p>
+<p id="favorites-empty">Star a folder in Folders to add it here.</p>
+<ul id="favorites-list"></ul>
+</section>
+<dialog id="file-dialog" aria-labelledby="file-dialog-title"><form id="file-form">
+<h2 id="file-dialog-title"></h2>
+<label id="file-name-label" for="file-name">New file name</label>
+<input id="file-name" maxlength="255">
+<div id="file-destination-tools">
+<label for="file-destination">Destination folder</label>
+<select id="file-destination"></select>
+<button id="file-browse-destination" type="button">Choose folder…</button>
+<p id="file-destination-path"></p>
 </div>
-<p id="category-empty" hidden>Use a clip’s menu in File Library to add it to a category.</p>
-<ol id="category-clips"></ol></section>
-<dialog id="category-dialog" aria-labelledby="category-dialog-title"><form id="category-form">
-<h2 id="category-dialog-title">New Category</h2>
-<label id="category-existing-label" for="category-existing" hidden>Category</label>
-<select id="category-existing" hidden></select>
-<label id="category-name-label" for="category-name">Category name</label>
-<input id="category-name" maxlength="60" placeholder="e.g. Open Movies" required>
-<p id="category-delete-prompt" hidden></p>
-<p id="category-status" role="status"></p>
-<div class="category-actions"><button type="button" id="category-create-new" hidden>New Category</button><button type="button" id="category-cancel">Cancel</button>
-<button type="submit" id="category-submit" class="primary">Create</button></div>
+<p id="file-dialog-status" role="status"></p>
+<div class="dialog-actions"><button id="file-dialog-cancel" type="button">Cancel</button>
+<button id="file-dialog-submit" type="submit" class="primary"></button></div>
 </form></dialog>
 <section id="pane-removed" hidden>
 <ol id="removed"></ol><p id="removed-empty" hidden>No removed videos.</p>
@@ -116,33 +193,40 @@ a{color:#a8d5ff}#history li{padding:6px 0;border-bottom:1px solid #30394a}
 <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
 <form id="confirm-form" method="dialog">
 <h2 id="confirm-title"></h2><div id="confirm-detail"></div>
-<div class="category-actions"><button value="cancel" autofocus>Cancel</button>
+<div class="dialog-actions"><button value="cancel" autofocus>Cancel</button>
 <button id="confirm-proceed" value="proceed"></button></div>
+</form></dialog>
+<dialog id="path-dialog" aria-labelledby="path-title"><form id="path-form" method="dialog">
+<label for="path-text" id="path-title">File path</label>
+<textarea id="path-text" rows="3" readonly aria-describedby="path-hint"></textarea>
+<small id="path-hint">Press Ctrl+C or Command+C to copy the selected path.</small>
+<div class="dialog-actions"><button>Close</button></div>
 </form></dialog>
 <section id="pane-history" hidden><div class="bar"><h2>PLAYBACK HISTORY</h2><button id="export-csv">Save CSV</button></div>
 <div class="bar"><label>Played on <input id="history-date" type="date"></label>
 <button id="history-clear-date" type="button">All dates</button></div>
 <p id="csv-result" role="status"></p><p id="history-empty" hidden></p><ol id="history"></ol></section>
 <section id="pane-backups" hidden>
-<div class="bar"><h2>LOCAL BACKUPS</h2><button id="backup-sqlite">Create SQLite backup</button></div>
+<div class="bar"><h2>LOCAL BACKUPS</h2><button id="backup-json">Create JSON backup</button></div>
 <button id="restore-file" type="button">Restore from file</button>
-<input id="restore-input" type="file" accept=".sqlite,.sqlite3,.db" hidden>
+<input id="restore-input" type="file" accept=".json,.sqlite,.sqlite3,.db" hidden>
 <button id="find-missing" type="button">Search Missing Files</button>
 <input id="missing-folder" type="file" webkitdirectory multiple hidden>
 <input id="missing-file" type="file" hidden>
 <p id="missing-summary" role="status"></p><ul id="missing-list"></ul>
-<p><small>SQLite saves the playlist, library list, and history. Video files stay in the media cache.</small></p>
+<p><small>JSON saves the playlist, library paths, favorite folders, and history. Keep the media files separately.</small></p>
 <label for="backup-folder">Backup folder</label>
 <input id="backup-folder" readonly style="width:100%;margin:4px 0" onclick="this.select()">
 <p id="backup-result" role="status"></p><ol id="backup-list"></ol></section>
-<div id="library-menu" hidden><button id="library-rename">Rename</button><button id="library-category">Add to Category</button><button id="category-remove" hidden>Remove from Category</button><button id="library-remove">Remove from Library</button></div>
+<div id="library-menu" hidden><button id="library-rename">Rename file</button><button id="library-copy-path">Copy path</button><button id="library-move">Move to…</button><button id="library-remove">Remove from Library</button></div>
 <div id="row-menu" hidden><button id="stop-recue">Insert Stop &amp; Re-cue below</button></div>
-<p id="message" role="status"></p><div id="playlist-toast" role="status" hidden></div>
+<div id="file-transfer" hidden><small id="file-transfer-label" role="status"></small><progress id="file-transfer-progress" max="1" aria-label="File operation progress"></progress></div>
+<p id="message" role="status"></p><div id="action-toast" role="status" hidden></div>
 </main>
 <script>
 const token = "__TOKEN__";
 const find = id => document.getElementById(id);
-const panes = ["queue", "library", "categories", "removed", "history", "backups"];
+const panes = ["queue", "library", "folders", "favorites", "removed", "history", "backups"];
 let selected = null;
 let pane = "queue";
 let menuClip = null;
@@ -154,7 +238,6 @@ const historyFormat = new Intl.DateTimeFormat(undefined, {dateStyle:"short", tim
 function selectPane(name) {
     closeLibraryMenu();
     find("tab-" + name).scrollIntoView({block:"nearest", inline:"nearest"});
-    if (pane !== name) editing = null;
     pane = name;
     try { localStorage.setItem("rundown-active-tab", name); } catch {}
     if (name === "backups") loadBackups();
@@ -162,7 +245,9 @@ function selectPane(name) {
         find("pane-" + key).hidden = key !== name;
         find("tab-" + key).setAttribute("aria-pressed", String(key === name));
     }
+    if (name === "folders" && last && !folderListing) browseFolder(folderRoot, folderParts);
     if (last) renderLists(last);
+    updateTabArrows();
 }
 async function loadBackups() {
     try {
@@ -174,7 +259,7 @@ async function loadBackups() {
             const row = document.createElement("li");
             row.textContent = file.name + " · " + Math.ceil(file.size / 1024) + " KB";
             row.style.overflowWrap = "anywhere";
-            if (file.name.endsWith(".sqlite")) {
+            if (/\.(?:json|sqlite)$/.test(file.name)) {
                 const restore = document.createElement("button");
                 restore.textContent = "Restore";
                 restore.onclick = () => confirmRestore(file.name, () => run("restore_backup", {name:file.name}));
@@ -204,7 +289,7 @@ async function saveExport(button, endpoint, result) {
     finally { button.disabled = false; }
 }
 find("export-csv").onclick = event => saveExport(event.currentTarget, "/export-csv", find("csv-result"));
-find("backup-sqlite").onclick = event => saveExport(event.currentTarget, "/backup-sqlite", find("backup-result"));
+find("backup-json").onclick = event => saveExport(event.currentTarget, "/backup-json", find("backup-result"));
 function showRowMenu(event, id) {
     event.preventDefault();
     menuClip = id;
@@ -243,7 +328,7 @@ const probed = new Map();
 let probing = false;
 async function probeDuration(items) {
     if (probing) return;
-    const item = items.find(clip => (!clip.duration_ms || !clip.metadata?.width) && !probed.has(clip.id));
+    const item = items.find(clip => clip.media_status === "ready" && (!clip.duration_ms || !clip.metadata?.width) && !probed.has(clip.id));
     if (!item) return;
     probing = true;
     probed.set(item.id, {});
@@ -270,18 +355,12 @@ async function probeDuration(items) {
 }
 function filterLibrary() {
     const query = find("library-search").value.trim().toLocaleLowerCase();
-    const category = find("library-category-filter").value;
-    const byCategory = find("library-search-mode").value === "category";
     let hasMatch = false;
     for (const row of find("library").children) {
-        const categories = JSON.parse(row.dataset.categories);
-        const matchesQuery = !query || (byCategory
-            ? categories.some(name => name.toLocaleLowerCase().includes(query))
-            : row.dataset.searchName.includes(query));
-        row.hidden = !matchesQuery || (category !== "" && !categories.includes(category));
+        row.hidden = !row.dataset.searchName.includes(query);
         hasMatch ||= !row.hidden;
     }
-    find("library-no-results").hidden = !(query || category) || hasMatch;
+    find("library-no-results").hidden = !query || hasMatch;
 }
 function clipAction(icon, label, onClick, type = "button") {
     const button = document.createElement("button");
@@ -314,7 +393,7 @@ function clipTitle(label, target, tag = "span") {
     }
     return viewport;
 }
-let libraryMenuButton, selectedCategory = "", categoryTarget, categoryEdit;
+let libraryMenuButton;
 function closeLibraryMenu(restoreFocus = false) {
     find("library-menu").hidden = true;
     if (libraryMenuButton) {
@@ -323,23 +402,25 @@ function closeLibraryMenu(restoreFocus = false) {
         libraryMenuButton = null;
     }
 }
-function openLibraryMenu(button, item, rename, category) {
+function openLibraryMenu(button, item) {
     const wasOpen = libraryMenuButton === button;
     closeLibraryMenu();
     if (wasOpen) return;
     const menu = find("library-menu");
     libraryMenuButton = button;
     button.setAttribute("aria-expanded", "true");
-    find("library-rename").onclick = () => { closeLibraryMenu(); rename(); };
-    find("library-category").onclick = () => {
-        closeLibraryMenu();
-        showCategoryDialog(item.id);
-    };
-    find("category-remove").hidden = !category;
-    find("category-remove").onclick = () => {
+    const rename = find("library-rename");
+    rename.disabled = item.missing || !item.file_path;
+    rename.onclick = () => { closeLibraryMenu(true); openFileDialog(item, "rename"); };
+    const copy = find("library-copy-path");
+    copy.hidden = !item.file_path;
+    copy.onclick = () => {
         closeLibraryMenu(true);
-        confirmAction("Remove from Category", "Remove “" + item.name + "” from “" + category + "”?", "remove_category", {id:item.id, category});
+        copyFilePath(item.file_path);
     };
+    const move = find("library-move");
+    move.disabled = item.missing || !item.file_path;
+    move.onclick = () => { closeLibraryMenu(true); openFileDialog(item, "move"); };
     find("library-remove").onclick = () => {
         closeLibraryMenu(true);
         confirmAction("Remove from Library", "Move “" + item.name + "” to Removed Videos?", "remove_media", {id:item.id});
@@ -351,140 +432,95 @@ function openLibraryMenu(button, item, rename, category) {
         ? box.bottom : box.top - menu.offsetHeight) + "px";
     find("library-rename").focus({preventScroll:true});
 }
-function setCategoryDialogMode(create) {
-    const picker = find("category-existing");
-    const input = find("category-name");
-    picker.hidden = picker.disabled = find("category-existing-label").hidden = create;
-    input.hidden = input.disabled = find("category-name-label").hidden = !create;
-    find("category-create-new").hidden = create;
-    find("category-dialog-title").textContent = create ? "New Category" : "Add to Category";
-    find("category-submit").textContent = create ? (categoryTarget ? "Create and Add" : "Create") : "Add";
-    find("category-status").textContent = "";
+function renderClipRow(item, index, isRemoved = false) {
+    const row = document.createElement("li");
+    row.className = "clip";
+    row.dataset.clipId = item.id;
+    row.dataset.searchName = item.name.toLocaleLowerCase();
+    if (!isRemoved) {
+        const number = document.createElement("span");
+        number.className = "library-number";
+        number.textContent = (index + 1) + ".";
+        row.append(number);
+    }
+    if (isRemoved) {
+        const title = clipTitle(item.name);
+        const restore = clipAction("↶", "Restore", () => run("restore_media", {id:item.id}));
+        const removeLabel = item.linked ? "Forget link" : "Move to Trash";
+        const trash = clipAction(item.linked ? "×" : "🗑︎", removeLabel, () => confirmAction(
+            removeLabel, item.linked ? "Remove the library record for “" + item.name + "”?"
+                : "Move “" + item.name + "” to your computer’s Trash or Recycle Bin?",
+            "trash_media", {id:item.id}));
+        const rename = clipAction("✎", "Rename file", () => openFileDialog(item, "rename"));
+        rename.disabled = item.missing || !item.file_path;
+        row.append(title, rename, restore, trash);
+        return row;
+    }
+    row.draggable = item.media_status === "ready";
+    row.ondragstart = event => {
+        event.dataTransfer.setData("application/x-rundown-media", item.id);
+        event.dataTransfer.effectAllowed = "copy";
+    };
+    const name = document.createElement("button");
+    name.className = "pick";
+    const metadata = document.createElement("small");
+    metadata.className = "clip-metadata";
+    metadata.dataset.clipId = item.id;
+    const extension = item.metadata?.format || item.name.match(/\.(mp4|ts|mov|flv|mkv|avi|gif|webm)$/i)?.[1].toUpperCase();
+    const title = extension && item.name.toUpperCase().endsWith("." + extension)
+        ? item.name.slice(0, -(extension.length + 1)) || item.name : item.name;
+    name.append(clipTitle(title, name), metadata);
+    if (item.file_path) {
+        const path = document.createElement("small");
+        path.className = "clip-path";
+        path.textContent = path.title = item.file_path;
+        name.append(path);
+    }
+    name.title = item.name;
+    name.disabled = item.media_status !== "ready";
+    name.onclick = () => run("cue", {id:item.id});
+    const add = clipAction("+", "Add to Playlist", () => addToPlaylist(item.id));
+    add.disabled = item.media_status !== "ready";
+    const more = clipAction("⋯", "Clip actions", () => openLibraryMenu(more, item));
+    more.setAttribute("aria-controls", "library-menu");
+    more.setAttribute("aria-expanded", "false");
+    row.append(name, add, more);
+    return row;
 }
-function showCategoryDialog(clipId = null) {
-    categoryTarget = clipId;
-    categoryEdit = null;
-    find("category-delete-prompt").hidden = true;
-    const picker = find("category-existing");
-    const names = [...find("category-select").options].map(option => option.value);
-    picker.replaceChildren(...names.map(name => new Option(name, name)));
-    picker.value = names.includes(selectedCategory) ? selectedCategory : names[0] || "";
-    find("category-name").value = "";
-    setCategoryDialogMode(!clipId || !names.length);
-    find("category-dialog").showModal();
-    (picker.hidden ? find("category-name") : picker).focus();
-}
+
 function renderLists(state) {
     const library = state.library || [], removed = state.removed || [];
+    libraryClips = new Map(library.map(item => [item.id, item]));
+    renderFolderRoots(state.folders || []);
+    renderFileRename(state.renames || []);
     renderMissing([...library, ...removed]);
-    const categories = [...new Set([...(state.categories || []), ...library.flatMap(item => item.categories || [])])].sort((a, b) => a.localeCompare(b));
-    if (!categories.includes(selectedCategory)) selectedCategory = categories[0] || "";
+    renderFavorites(state.favorites || [], library);
+    renderFileOperation(state.file_operation || {});
+    const folderClips = folderListing ? clipsInFolder(library, folderRoot, folderParts) : [];
+    find("folder-empty").hidden = !folderListing || folderClips.length > 0;
     const key = JSON.stringify([
         ...[library, removed].map(clips => clips.map(({duration_ms, metadata, ...clip}) => clip)),
-        categories, editing, selectedCategory, pane === "categories"
+        folderClips.map(clip => clip.id)
     ]);
     if (key !== libraryKey) {
         closeLibraryMenu();
         libraryKey = key;
-        const filter = find("library-category-filter");
-        const previousFilter = filter.value;
-        filter.replaceChildren(new Option("All categories", ""), ...categories.map(name => new Option(name, name)));
-        filter.value = categories.includes(previousFilter) ? previousFilter : "";
-        const options = categories.map(name => new Option(name, name));
-        const select = find("category-select");
-        select.replaceChildren(...options);
-        select.value = selectedCategory;
-        select.disabled = !categories.length;
-        find("category-rename").disabled = find("category-delete").disabled = select.disabled;
-        const categorized = library.filter(item => item.categories?.includes(selectedCategory));
-        const emptyCategory = find("category-empty");
-        emptyCategory.hidden = categorized.length > 0;
-        emptyCategory.textContent = selectedCategory ? "No clips in this category." : "Create a category to get started.";
-        for (const [list, clips] of [["library", library], ["removed", removed], ["category-clips", categorized]]) {
+        for (const [list, clips] of [["library", library], ["folder-clips", folderClips], ["removed", removed]]) {
             const isRemoved = list === "removed";
-            find(list).replaceChildren(...clips.map((item, index) => {
-                const row = document.createElement("li");
-                row.className = "clip";
-                row.dataset.searchName = item.name.toLocaleLowerCase();
-                row.dataset.categories = JSON.stringify(item.categories || []);
-                if (!isRemoved) {
-                    const number = document.createElement("span");
-                    number.className = "library-number";
-                    number.textContent = (index + 1) + ".";
-                    row.append(number);
-                }
-                if (editing === item.id && (pane === "categories" ? list === "category-clips" : list !== "category-clips")) {
-                    const form = document.createElement("form");
-                    form.className = "rename";
-                    const input = document.createElement("input");
-                    input.value = draft;
-                    input.maxLength = 160;
-                    input.required = true;
-                    input.setAttribute("aria-label", "Clip name");
-                    input.oninput = () => { draft = input.value; };
-                    const close = () => { editing = null; render(last); };
-                    const save = clipAction("✓", "Save", null, "submit");
-                    const cancel = clipAction("×", "Cancel", close);
-                    form.onkeydown = event => { if (event.key === "Escape") close(); };
-                    form.onsubmit = async event => {
-                        event.preventDefault();
-                        if (!input.value.trim()) return;
-                        if (await run("rename", {id: item.id, title: input.value})) close();
-                    };
-                    form.append(input, save, cancel);
-                    row.append(form);
-                    requestAnimationFrame(() => { if (input.isConnected) { input.focus(); input.select(); } });
-                    return row;
-                }
-                const rename = () => {
-                    editing = item.id;
-                    draft = item.name;
-                    render(last);
-                };
-                if (isRemoved) {
-                    const title = clipTitle(item.name);
-                    const restore = clipAction("↶", "Restore", () => run("restore_media", {id:item.id}));
-                    const trash = clipAction("🗑︎", "Move to Trash", () => confirmAction(
-                        "Move to Trash", "Move “" + item.name + "” to your computer’s Trash or Recycle Bin?",
-                        "trash_media", {id:item.id}));
-                    row.append(title, clipAction("✎", "Rename", rename), restore, trash);
-                    return row;
-                }
-                row.draggable = true;
-                row.ondragstart = event => {
-                    event.dataTransfer.setData("application/x-rundown-media", item.id);
-                    event.dataTransfer.effectAllowed = "copy";
-                };
-                const name = document.createElement("button");
-                name.className = "pick";
-                const metadata = document.createElement("small");
-                metadata.className = "clip-metadata";
-                metadata.dataset.clipId = item.id;
-                const extension = item.metadata?.format || item.name.match(/\.(mp4|ts|mov|flv|mkv|avi|gif|webm)$/i)?.[1].toUpperCase();
-                const title = extension && item.name.toUpperCase().endsWith("." + extension)
-                    ? item.name.slice(0, -(extension.length + 1)) || item.name : item.name;
-                name.append(clipTitle(title, name), metadata);
-                name.title = item.name;
-                name.disabled = !!item.missing;
-                name.onclick = () => run("cue", {id:item.id});
-                const add = clipAction("+", "Add to Playlist", () => addToPlaylist(item.id));
-                add.disabled = !!item.missing;
-                const more = clipAction("⋯", "Clip actions", () => openLibraryMenu(more, item, rename, list === "category-clips" ? selectedCategory : ""));
-                more.setAttribute("aria-controls", "library-menu");
-                more.setAttribute("aria-expanded", "false");
-                row.append(name, add, more);
-                return row;
-            }));
+            find(list).replaceChildren(...clips.map((item, index) => renderClipRow(item, index, isRemoved)));
         }
         find("removed-empty").hidden = removed.length > 0;
         filterLibrary();
     }
-    const libraryById = new Map(library.map(item => [item.id, item]));
-    for (const label of document.querySelectorAll("#library .clip-metadata, #category-clips .clip-metadata")) {
-        const clip = libraryById.get(label.dataset.clipId);
+    for (const label of document.querySelectorAll("#library .clip-metadata, #folder-clips .clip-metadata, #favorites-list .clip-metadata")) {
+        const clip = libraryClips.get(label.dataset.clipId);
         const {width, height, fps, format, codec, size_bytes, created_at, modified_at, cached_modified} = {...probed.get(clip.id), ...clip.metadata};
         const details = [
             clip.missing && "Missing file",
+            clip.unsupported && "Unsupported · " + clip.unsupported,
+            clip.media_status === "checking" && "Checking video",
+            clip.media_status === "organizing" && "File operation in progress",
+            clip.linked && "Linked",
             clip.duration_ms && clock(clip.duration_ms),
             width && height && width + "×" + height,
             fps && fps + " fps",
@@ -575,8 +611,6 @@ function bindGrip(handle, item, index, queue) {
         }
     };
 }
-let editing = null;
-let draft = "";
 let last = null;
 let queueKey = "";
 let error = "";
@@ -595,7 +629,9 @@ async function post(path, body, headers = {}) {
     const response = await fetch(path, {
         method: "POST", headers: {"X-Rundown": token, ...headers}, body
     });
-    if (!response.ok) throw new Error((await response.json()).error || "Request rejected.");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Request rejected.");
+    return result;
 }
 
 function drawTime(now) {
@@ -610,7 +646,7 @@ function drawTime(now) {
 function render(state) {
     if (state !== last) sampledAt = performance.now() - (state.sample_age_ms || 0);
     last = state;
-    if (!state.queue.some(clip => clip.id === selected && !clip.marker)) selected = state.queue.find(clip => clip.id === state.next_cue && !clip.marker)?.id ?? state.queue.find(clip => !clip.marker)?.id ?? null;
+    if (!state.queue.some(clip => clip.id === selected && clip.media_status === "ready")) selected = state.queue.find(clip => clip.id === state.next_cue && clip.media_status === "ready")?.id ?? state.queue.find(clip => clip.media_status === "ready")?.id ?? null;
     const clip = state.queue.find(clip => clip.id === state.current);
     const onAir = state.program && clip && ["Playing", "Paused", "Loading", "Opening", "Buffering"].includes(state.status);
     find("program").textContent = onAir ? "ON AIR" : state.program ? "Program ready" : "Scene off Program";
@@ -622,6 +658,7 @@ function render(state) {
         document.querySelector("progress").value = 0;
     }
     find("setup").hidden = state.ready;
+    find("setup").textContent = state.setup_existing ? "Use existing scene" : "Set up scene";
     find("auto").checked = state.auto;
     find("auto-cut").value = state.auto_cut || "off";
     const target = state.preview && state.preview !== "Video Rundown" ? state.preview : null;
@@ -631,7 +668,7 @@ function render(state) {
         find("cut-target").textContent += " · Ready to cut";
     }
     find("play").disabled = busy || !state.ready || !state.program || !selected;
-    find("next").disabled = busy || !state.ready || !state.program || !state.queue.some((item, i) => item.id === state.next_cue || (!item.marker && !item.played && i > state.queue.findIndex(row => row.id === state.current)));
+    find("next").disabled = busy || !state.ready || !state.program || !state.queue.some((item, i) => item.media_status === "ready" && (item.id === state.next_cue || (!item.played && i > state.queue.findIndex(row => row.id === state.current))));
     find("pause").textContent = state.status === "Paused" ? "Resume" : "Pause";
     find("pause").disabled = busy || !["Playing", "Paused"].includes(state.status) || !clip;
     find("stop").disabled = busy || !clip;
@@ -670,7 +707,10 @@ function render(state) {
             const airtime = document.createElement("span");
             airtime.className = "airtime";
             pick.append(name, airtime);
-            pick.title = item.name;
+            pick.title = item.unsupported || item.name;
+            pick.disabled = !current && item.media_status !== "ready";
+            if (pick.disabled) name.append(item.unsupported ? " · Unsupported"
+                : item.missing ? " · Missing file" : " · Checking video");
             pick.setAttribute("aria-current", String(item.id === selected));
             pick.onclick = () => { selected = item.id; render(last); run("cue", {id: item.id}); };
             const grip = document.createElement("button");
@@ -706,7 +746,7 @@ function render(state) {
 
 async function refresh() {
     try {
-        const response = await fetch("/state", {cache:"no-store"});
+        const response = await fetch("/state", {cache:"no-store", headers:{"X-Rundown":token}});
         const state = await response.json();
         find("metadata-upgrade").hidden = !state.library?.some(clip => !clip.metadata);
         render(state);
@@ -714,7 +754,7 @@ async function refresh() {
 }
 
 function confirmRestore(name, restore) {
-    confirmAction("Restore Backup", "Restore “" + name + "”? This replaces the current library, playlist, categories, settings, and history. A safety backup is saved first.",
+    confirmAction("Restore Backup", "Restore “" + name + "”? This replaces the current library, playlist, favorites, settings, and history. A safety backup is saved first.",
         async () => {
             if (await restore()) {
                 find("backup-result").textContent = "Backup restored.";
@@ -745,13 +785,26 @@ function renderMissing(items) {
     if (missingKey === key) return;
     missingKey = key;
     find("missing-summary").textContent = missing.length ? missing.length + " missing video files" : "No missing video files.";
-    find("find-missing").disabled = !missing.length;
+    find("find-missing").disabled = !missing.some(item => !item.linked);
     find("missing-list").replaceChildren(...missing.map(item => {
         const row = document.createElement("li");
         row.textContent = (item.original_name || item.name) + " ";
         const locate = document.createElement("button");
         locate.textContent = "Locate…";
-        locate.onclick = () => { missingTarget = item; find("missing-file").click(); };
+        locate.onclick = async () => {
+            if (!item.linked) {
+                missingTarget = item;
+                find("missing-file").click();
+                return;
+            }
+            try {
+                const result = await post("/locate-linked", JSON.stringify({id:item.id}), {"Content-Type":"application/json"});
+                if (!result.cancelled) {
+                    await refresh();
+                    find("backup-result").textContent = "Reconnected “" + item.name + "”.";
+                }
+            } catch (e) { find("backup-result").textContent = e.message; }
+        };
         row.append(locate);
         return row;
     }));
@@ -770,7 +823,7 @@ find("missing-folder").onchange = async event => {
         byName.set(name, byName.has(name) ? null : file);
     }
     let count = 0, failures = 0;
-    for (const item of [...(last?.library || []), ...(last?.removed || [])].filter(item => item.missing)) {
+    for (const item of [...(last?.library || []), ...(last?.removed || [])].filter(item => item.missing && !item.linked)) {
         const file = byName.get((item.original_name || item.name).toLowerCase());
         if (!file) continue;
         try { await relinkFile(item, file); count++; } catch { failures++; }
@@ -843,18 +896,615 @@ async function add(files) {
         await refresh();
     }
 }
+let libraryClips = new Map();
+let folderRoot = "", folderParts = [], folderListing, folderRootsKey, folderRequest = 0;
+let folderBusy = false, folderRenameTarget;
+const libraryLocationKey = "rundown-library-location";
+let changeReviewKey, changeReviewBusy = false;
+
+function saveLibraryLocation() {
+    try {
+        localStorage.setItem(libraryLocationKey, JSON.stringify({root:folderRoot, parts:folderParts}));
+    } catch {}
+}
+
+function restoreLibraryLocation() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(libraryLocationKey));
+        if (!saved || typeof saved.root !== "string" || !Array.isArray(saved.parts)
+                || saved.parts.some(part => typeof part !== "string")) return;
+        folderRoot = saved.root;
+        folderParts = saved.parts;
+        if (saved.view === "folders" && savedPane === "library") savedPane = "folders";
+        saveLibraryLocation();
+    } catch {}
+}
+
+function renderFileRename(suggestions) {
+    find("file-rename-notice").hidden = !suggestions.length;
+    const summary = find("file-rename-summary");
+    const text = suggestions.length + (suggestions.length === 1 ? " possible file move or rename" : " possible file moves or renames");
+    if (summary.textContent !== text) summary.textContent = text;
+    const dialog = find("file-change-dialog");
+    if (!dialog.open) return;
+    const key = JSON.stringify([suggestions, changeReviewBusy]);
+    if (key === changeReviewKey) return;
+    changeReviewKey = key;
+    find("file-change-list").replaceChildren(...suggestions.map(item => {
+        const row = document.createElement("li");
+        for (const [label, path] of [["Previous path", item.old_path], ["New path", item.new_path]]) {
+            const line = document.createElement("p");
+            line.textContent = label + " · " + path;
+            row.append(line);
+        }
+        const reconnect = document.createElement("button");
+        reconnect.type = "button";
+        reconnect.textContent = "Reconnect clip";
+        reconnect.disabled = changeReviewBusy;
+        reconnect.onclick = async () => {
+            if (changeReviewBusy) return;
+            changeReviewBusy = true;
+            renderFileRename(last?.renames || []);
+            const message = find("file-change-message");
+            message.textContent = "Reconnecting clip…";
+            try {
+                await folderApi("/confirm-file-rename", {id:item.id, path:item.new_path});
+                await refresh();
+                message.textContent = last?.renames?.length ? "Clip reconnected." : "All matching changes reviewed.";
+            } catch (err) {
+                message.textContent = err.message;
+            } finally {
+                changeReviewBusy = false;
+                renderFileRename(last?.renames || []);
+            }
+        };
+        row.append(reconnect);
+        return row;
+    }));
+}
+
+find("file-rename-review").onclick = () => {
+    find("file-change-message").textContent = "";
+    find("file-change-dialog").showModal();
+    changeReviewKey = null;
+    renderFileRename(last?.renames || []);
+};
+
+let favoritesKey, fileTarget, destinationPath = "", shownFileOperation;
+const destinationPicker = find("file-destination");
+
+function folderLocation() {
+    const separator = folderRoot.startsWith("/") ? "/" : "\\";
+    if (!folderParts.length) return folderRoot;
+    return folderRoot.replace(/[\\/]$/, "") + separator + folderParts.join(separator);
+}
+
+function favoriteAtLocation() {
+    const path = folderLocation();
+    return last?.favorites?.find(item => path.startsWith("/")
+        ? item.path === path : item.path.toLowerCase() === path.toLowerCase());
+}
+
+const expandedFavorites = new Set();
+
+function clipsInFolder(library, root, parts) {
+    const location = folderBranchKey(parts);
+    return library.filter(clip => {
+        const clipFolder = clip.folder_paths?.[root];
+        return clipFolder && folderBranchKey(clipFolder) === location;
+    });
+}
+
+function confirmUnstar(favorite) {
+    confirmAction("Remove from Favorites", "Unstar “" + favorite.path + "”? The folder and files stay on the drive.",
+        () => updateFavorite({path:favorite.path, starred:false}));
+}
+
+function favoriteTree(favorite, library) {
+    const separator = favorite.path.startsWith("/") ? "/" : "\\";
+    const tree = {name:favorite.name, path:favorite.path, clips:[], children:[]};
+    const pathPartKey = name => separator === "/" ? name : name.toLowerCase();
+    const rootKey = folderBranchKey(favorite.parts.map(pathPartKey));
+
+    function branch(parts) {
+        let node = tree;
+        for (const name of parts) {
+            let child = node.children.find(entry => pathPartKey(entry.name) === pathPartKey(name));
+            if (!child) {
+                const path = node.path.replace(/[\\/]$/, "") + separator + name;
+                child = {name, path, clips:[], children:[]};
+                node.children.push(child);
+            }
+            node = child;
+        }
+        return node;
+    }
+
+    for (const parts of favorite.folders || []) branch(parts);
+    for (const clip of library) {
+        const parts = clip.folder_paths?.[favorite.root];
+        if (parts && folderBranchKey(parts.slice(0, favorite.parts.length).map(pathPartKey)) === rootKey) {
+            branch(parts.slice(favorite.parts.length)).clips.push(clip);
+        }
+    }
+    return tree;
+}
+
+function filterFavoriteTree(node, query, includeAll = false) {
+    const matchesFolder = includeAll || !query || node.path.toLocaleLowerCase().includes(query);
+    const clips = matchesFolder ? node.clips : node.clips.filter(clip =>
+        [clip.name, clip.original_name].some(name => name?.toLocaleLowerCase().includes(query)));
+    const children = node.children
+        .map(child => filterFavoriteTree(child, query, matchesFolder))
+        .filter(Boolean)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    return matchesFolder || clips.length || children.length ? {...node, clips, children} : null;
+}
+
+function favoriteDetails(node, query, top = false) {
+    const details = document.createElement("details");
+    details.open = query ? Boolean(node.clips.length || node.children.length) : expandedFavorites.has(node.path);
+    details.ontoggle = () => {
+        if (query || !details.isConnected) return;
+        if (details.open) expandedFavorites.add(node.path);
+        else expandedFavorites.delete(node.path);
+    };
+    const summary = document.createElement("summary");
+    const title = document.createElement("strong");
+    title.textContent = node.name;
+    summary.append(title);
+    if (top) {
+        const path = document.createElement("small");
+        path.className = "favorite-path";
+        path.textContent = node.path;
+        summary.append(path);
+    } else {
+        summary.title = node.path;
+    }
+    details.append(summary);
+    if (node.children.length) {
+        const list = document.createElement("ul");
+        list.className = "favorite-subfolders";
+        for (const child of node.children) {
+            const row = document.createElement("li");
+            row.append(favoriteDetails(child, query));
+            list.append(row);
+        }
+        details.append(list);
+    }
+    if (node.clips.length) {
+        const list = document.createElement("ol");
+        list.append(...node.clips.map((clip, index) => renderClipRow(clip, index)));
+        details.append(list);
+    } else if (!node.children.length) {
+        const empty = document.createElement("p");
+        empty.className = "favorite-folder-empty";
+        empty.textContent = "No library clips in this folder.";
+        details.append(empty);
+    }
+    return details;
+}
+
+function renderFavorites(items, library) {
+    const search = find("favorites-search");
+    const query = search.value.trim().toLocaleLowerCase();
+    const matching = items.flatMap(favorite => {
+        const tree = filterFavoriteTree(favoriteTree(favorite, library), query);
+        return tree ? [{favorite, tree}] : [];
+    });
+    const key = JSON.stringify([query, matching, items.length],
+        (name, value) => name === "duration_ms" || name === "metadata" ? undefined : value);
+    if (key === favoritesKey) return;
+    favoritesKey = key;
+    if (pane === "favorites") closeLibraryMenu();
+    find("favorites-empty").hidden = items.length > 0;
+    find("favorites-no-results").hidden = !items.length || matching.length > 0;
+    search.disabled = !items.length;
+    find("favorites-list").replaceChildren(...matching.map(({favorite, tree}) => {
+        const row = document.createElement("li");
+        row.className = "favorite-folder";
+        row.append(favoriteDetails(tree, query, true),
+            clipAction("★", "Remove from Favorites", () => confirmUnstar(favorite)));
+        return row;
+    }));
+}
+
+find("favorites-search").addEventListener("input", () => {
+    if (last) renderLists(last);
+});
+
+async function updateFavorite(data) {
+    try {
+        await folderApi("/favorite-folder", data);
+        await refresh();
+        if (pane === "folders") renderFolderListing();
+    } catch (err) { showToast(err.message); }
+}
+
+find("folder-star").onclick = () => {
+    const favorite = favoriteAtLocation();
+    if (favorite) confirmUnstar(favorite);
+    else updateFavorite({root:folderRoot, parts:folderParts, starred:true});
+};
+
+function setDestination(path) {
+    destinationPath = path;
+    find("file-destination-path").textContent = path;
+    find("file-dialog-submit").disabled = !path;
+}
+
+function openFileDialog(item, kind) {
+    if (last?.file_operation?.status === "running") {
+        showToast("Wait for the current file operation to finish.");
+        return;
+    }
+    fileTarget = {item, kind};
+    const rename = kind === "rename";
+    const input = find("file-name");
+    input.hidden = find("file-name-label").hidden = !rename;
+    input.required = rename;
+    find("file-destination-tools").hidden = rename;
+    find("file-dialog-title").textContent = rename ? "Rename file on drive" : "Move file";
+    find("file-dialog-submit").textContent = rename ? "Rename file" : "Move file";
+    find("file-dialog-status").textContent = "";
+    input.value = item.original_name;
+    const paths = new Set([...(last?.favorites || []).map(folder => folder.path),
+        ...(last?.folders || []).filter(folder => folder.registered).map(folder => folder.path)]);
+    destinationPicker.replaceChildren(new Option("Choose a destination", ""),
+        ...[...paths].map(path => new Option(path, path)));
+    setDestination("");
+    if (rename) find("file-dialog-submit").disabled = false;
+    find("file-dialog").showModal();
+    if (rename) input.setSelectionRange(0, Math.max(0, input.value.lastIndexOf(".")));
+}
+
+find("file-browse-destination").onclick = async event => {
+    const button = event.currentTarget;
+    const requested = fileTarget;
+    button.disabled = true;
+    try {
+        const result = await folderApi("/pick-file-destination", {id:requested.item.id});
+        if (!result.path || fileTarget !== requested || !find("file-dialog").open) return;
+        if (![...destinationPicker.options].some(option => option.value === result.path)) {
+            destinationPicker.add(new Option(result.path, result.path));
+        }
+        destinationPicker.value = result.path;
+        setDestination(result.path);
+    } catch (err) { find("file-dialog-status").textContent = err.message; }
+    finally { button.disabled = false; }
+};
+destinationPicker.onchange = event => setDestination(event.target.value);
+find("file-dialog-cancel").onclick = () => find("file-dialog").close();
+find("file-form").onsubmit = async event => {
+    event.preventDefault();
+    const {item, kind} = fileTarget;
+    const button = find("file-dialog-submit");
+    button.disabled = true;
+    const data = {id:item.id, kind, path:item.file_path};
+    if (kind === "rename") {
+        const name = find("file-name").value.trim();
+        const extension = item.original_name.slice(item.original_name.lastIndexOf("."));
+        data.name = name.toLowerCase().endsWith(extension.toLowerCase()) ? name : name + extension;
+    } else {
+        data.destination = destinationPath;
+    }
+    try {
+        await folderApi("/file-operation", data);
+        find("file-dialog").close();
+        await refresh();
+    } catch (err) {
+        find("file-dialog-status").textContent = err.message;
+        showToast(err.message);
+    } finally { button.disabled = false; }
+};
+
+function renderFileOperation(job) {
+    const running = job.status === "running";
+    find("file-transfer").hidden = !running;
+    if (running) {
+        const progress = find("file-transfer-progress");
+        const label = find("file-transfer-label");
+        const verb = job.kind === "move" ? "Moving video" : "Renaming video";
+        if (job.total) {
+            progress.value = job.bytes / job.total;
+            const text = verb + " · " + Math.floor(100 * progress.value) + "%";
+            if (label.textContent !== text) label.textContent = text;
+        } else {
+            progress.removeAttribute("value");
+            if (label.textContent !== verb) label.textContent = verb;
+        }
+    } else if (job.id && job.id !== shownFileOperation) {
+        shownFileOperation = job.id;
+        showToast(job.message);
+    }
+}
+
+function folderBranchKey(parts) {
+    return JSON.stringify(parts);
+}
+
+function folderApi(endpoint, data) {
+    return post(endpoint, JSON.stringify(data), {"Content-Type":"application/json"});
+}
+
+function renderFolderRoots(roots) {
+    const key = JSON.stringify(roots);
+    if (key === folderRootsKey) return;
+    folderRootsKey = key;
+    const root = find("folder-root");
+    root.replaceChildren(...roots.map(item => new Option(item.registered ? item.path : item.path + " (saved)", item.path)));
+    root.disabled = !roots.length || folderBusy;
+    if (!roots.some(item => item.path === folderRoot)) {
+        folderRoot = roots[0]?.path || "";
+        folderParts = [];
+        folderListing = null;
+    }
+    root.value = folderRoot;
+    root.title = folderRoot;
+    if (pane === "folders" && !folderListing) browseFolder(folderRoot, folderParts);
+}
+
+function renderFolderListing() {
+    const breadcrumb = find("folder-breadcrumb");
+    const children = find("folder-children");
+    const root = last?.folders?.find(item => item.path === folderRoot);
+    find("folder-register").hidden = !root || root.registered;
+    find("folder-register").disabled = folderBusy;
+    find("folder-refresh").hidden = Boolean(root && !root.registered);
+    find("folder-refresh").disabled = folderBusy || !folderRoot;
+    const star = find("folder-star");
+    const favorite = Boolean(favoriteAtLocation());
+    star.hidden = !folderListing;
+    star.disabled = folderBusy;
+    star.setAttribute("aria-pressed", String(favorite));
+    star.textContent = favorite ? "★ Starred" : "☆ Star folder";
+    find("folder-rename").hidden = !folderListing || folderListing.saved_only || !folderParts.length;
+    find("folder-rename").disabled = folderBusy;
+    breadcrumb.replaceChildren();
+    children.replaceChildren();
+    if (folderRoot) {
+        breadcrumb.append(folderButton(root?.name || folderRoot, [], folderRoot));
+        folderParts.forEach((name, index) => {
+            const arrow = document.createElement("span");
+            arrow.className = "breadcrumb-chevron";
+            arrow.setAttribute("aria-hidden", "true");
+            arrow.textContent = "›";
+            breadcrumb.append(arrow, folderButton(name, folderParts.slice(0, index + 1)));
+        });
+    }
+    for (const name of folderListing?.children || []) {
+        const row = document.createElement("li");
+        const button = folderButton(name, [...folderParts, name]);
+        button.className = "folder-child";
+        const arrow = document.createElement("span");
+        arrow.className = "folder-child-arrow";
+        arrow.setAttribute("aria-hidden", "true");
+        arrow.textContent = "›";
+        button.prepend(arrow);
+        row.append(button);
+        children.append(row);
+    }
+    if (last) renderLists(last);
+}
+
+function folderButton(name, parts, title = "Open folder") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = name;
+    button.title = title;
+    button.disabled = folderBusy;
+    button.onclick = () => browseFolder(folderRoot, parts);
+    return button;
+}
+
+function folderMessage(message) {
+    const label = find("folder-message");
+    label.textContent = message;
+    label.hidden = !message;
+}
+
+async function browseFolder(root, parts, resultMessage = "") {
+    const request = ++folderRequest;
+    folderRoot = root;
+    folderParts = parts;
+    folderListing = null;
+    find("folder-root").value = root;
+    find("folder-root").title = root;
+    renderFolderListing();
+    if (!root) {
+        folderMessage("Link a folder to browse its subfolders.");
+        return;
+    }
+    folderMessage("Opening folder…");
+    try {
+        const listing = await folderApi("/browse-folder", {root, parts});
+        if (request !== folderRequest) return;
+        folderListing = listing;
+        folderParts = listing.parts;
+        saveLibraryLocation();
+        folderMessage(listing.warning || resultMessage || (listing.saved_only
+            ? "Showing previously linked clips. Choose Use this folder to enable refresh and folder renaming."
+            : ""));
+    } catch (err) {
+        if (request !== folderRequest) return;
+        folderMessage(err.message);
+    }
+    renderFolderListing();
+}
+
+let pollingFolder = false;
+async function pollFolderListing() {
+    if (pollingFolder || folderBusy || pane !== "folders" || !folderListing
+            || !last?.folders?.some(item => item.path === folderRoot && item.registered)) return;
+    const request = folderRequest;
+    pollingFolder = true;
+    try {
+        const listing = await folderApi("/browse-folder", {root:folderRoot, parts:folderParts});
+        if (request !== folderRequest || JSON.stringify(listing) === JSON.stringify(folderListing)) return;
+        const oldWarning = folderListing.warning;
+        folderListing = listing;
+        if (oldWarning || listing.warning) folderMessage(listing.warning || "");
+        renderFolderListing();
+    } catch { /* Keep the existing view until the next check. */ }
+    finally { pollingFolder = false; }
+}
+
+function setFolderBusy(value) {
+    folderBusy = value;
+    find("folder-root").disabled = value || !(last?.folders?.length);
+    renderFolderListing();
+}
+
+find("folder-root").onchange = event => browseFolder(event.target.value, []);
+find("folder-register").onclick = async () => {
+    if (folderBusy) return;
+    const root = folderRoot, parts = folderParts;
+    setFolderBusy(true);
+    try {
+        await folderApi("/register-folder", {root});
+        await refresh();
+        if (folderRoot === root) await browseFolder(root, parts, "Folder enabled. Use Refresh folder to check for new videos.");
+    } catch (err) {
+        folderMessage(err.message);
+    } finally {
+        setFolderBusy(false);
+    }
+};
+find("folder-refresh").onclick = async () => {
+    if (folderBusy) return;
+    const root = folderRoot, parts = folderParts;
+    setFolderBusy(true);
+    folderMessage("Scanning this folder and its subfolders…");
+    try {
+        const result = await folderApi("/refresh-folder", {root, parts});
+        await refresh();
+        if (folderRoot === root) {
+            await browseFolder(root, parts, result.added + " new clips found. " + result.unsupported + " unsupported.");
+        }
+    } catch (err) {
+        folderMessage(err.message);
+    } finally {
+        setFolderBusy(false);
+    }
+};
+
+find("folder-rename").onclick = () => {
+    if (!folderListing || folderListing.saved_only || !folderParts.length || folderBusy) return;
+    const input = find("folder-rename-name");
+    folderRenameTarget = {root:folderRoot, parts:folderParts};
+    input.value = folderParts.at(-1);
+    find("folder-rename-error").textContent = "";
+    find("folder-rename-dialog").showModal();
+    input.select();
+};
+find("folder-rename-cancel").onclick = () => find("folder-rename-dialog").close();
+find("folder-rename-form").onsubmit = async event => {
+    event.preventDefault();
+    if (folderBusy) return;
+    const {root, parts} = folderRenameTarget;
+    const name = find("folder-rename-name").value;
+    const submit = find("folder-rename-submit");
+    find("folder-rename-cancel").disabled = submit.disabled = true;
+    setFolderBusy(true);
+    try {
+        const result = await folderApi("/rename-folder", {root, parts, name});
+        find("folder-rename-dialog").close();
+        await refresh();
+        if (folderRoot === root) await browseFolder(root, result.parts, "Folder renamed on drive.");
+    } catch (err) {
+        find("folder-rename-error").textContent = err.message;
+    } finally {
+        find("folder-rename-cancel").disabled = submit.disabled = false;
+        setFolderBusy(false);
+    }
+};
+find("folder-rename-dialog").addEventListener("cancel", event => {
+    if (folderBusy) event.preventDefault();
+});
+
+let linkingFolder = false;
+async function linkFolder(name = "") {
+    if (linkingFolder) return;
+    if (pane !== "folders") selectPane("library");
+    linkingFolder = true;
+    find("link-folder").disabled = true;
+    const status = find(pane === "folders" ? "folder-message" : "folder-result");
+    status.hidden = false;
+    status.textContent = "Choose the folder in the native window. Verification may take a while for large folders.";
+    try {
+        const result = await folderApi("/link-folder", {name});
+        status.textContent = result.cancelled ? "" : result.total
+            ? "Checked " + result.total + " linked video files. Unsupported: " + result.unsupported + "."
+            : "No recognized video files were found.";
+        await refresh();
+        if (!result.cancelled && pane === "folders" && result.root) await browseFolder(result.root, []);
+    } catch (error) {
+        status.textContent = error.message;
+    } finally {
+        linkingFolder = false;
+        find("link-folder").disabled = false;
+        status.hidden = !status.textContent;
+    }
+}
+find("link-folder").onclick = () => linkFolder();
+find("folder-link-root").onclick = () => linkFolder();
+async function linkFile(name = "") {
+    const button = find("link-file");
+    if (button.disabled) return;
+    selectPane("library");
+    button.disabled = true;
+    const status = find("folder-result");
+    status.hidden = false;
+    status.textContent = "Use the native window to select or drop the original video.";
+    try {
+        const result = await folderApi("/link-file", {name});
+        status.textContent = result.cancelled ? "" : result.unsupported ? result.unsupported : "Original video linked.";
+        await refresh();
+    } catch (err) { status.textContent = err.message; }
+    finally {
+        button.disabled = false;
+        status.hidden = !status.textContent;
+    }
+}
+find("link-file").onclick = () => linkFile();
 find("browse").onclick = () => find("files").click();
 find("files").onchange = e => add(e.target.files);
 let toastTimer;
+function showToast(message) {
+    const toast = find("action-toast");
+    toast.textContent = message;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, 2500);
+}
+
+async function copyFilePath(path) {
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(path);
+            showToast("File path copied.");
+            return;
+        } catch { /* The OBS dock may restrict clipboard access. */ }
+    }
+    const dialog = find("path-dialog");
+    const field = find("path-text");
+    field.value = path;
+    dialog.showModal();
+    field.focus();
+    field.select();
+    try {
+        if (document.execCommand("copy")) {
+            dialog.close();
+            showToast("File path copied.");
+        }
+    } catch { /* Leave the path selected for manual copying. */ }
+}
+
 async function addToPlaylist(id, placement = {}) {
     const item = last?.library.find(clip => clip.id === id);
-    const fromLibrary = pane === "library" || pane === "categories";
+    const fromLibrary = ["library", "folders", "favorites"].includes(pane);
     if (await run("enqueue", {id, ...placement}) && fromLibrary) {
-        const toast = find("playlist-toast");
-        toast.textContent = item ? "Added to Playlist: " + item.name : "Added to Playlist";
-        toast.hidden = false;
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => { toast.hidden = true; }, 2500);
+        showToast(item ? "Added to Playlist: " + item.name : "Added to Playlist");
     }
 }
 const mediaDrag = "application/x-rundown-media";
@@ -874,16 +1524,36 @@ window.addEventListener("drop", event => {
         const row = event.target.closest("#queue .clip");
         const box = row?.getBoundingClientRect();
         addToPlaylist(id, {target:row?.dataset.id, after:box && event.clientY > box.top + box.height / 2});
-    } else if (!id) add(event.dataTransfer.files);
+    } else if (!id) {
+        const entries = [...event.dataTransfer.items].map(item => item.webkitGetAsEntry?.());
+        const folder = entries.find(entry => entry?.isDirectory);
+        if (folder) linkFolder(folder.name);
+        else if (event.dataTransfer.files.length) linkFile(event.dataTransfer.files[0].name);
+    }
 });
 const tabs = find("rundown-tabs");
+function updateTabArrows() {
+    find("tabs-left").disabled = tabs.scrollLeft <= 1;
+    find("tabs-right").disabled = tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1;
+}
+for (const direction of [-1, 1]) {
+    find(direction < 0 ? "tabs-left" : "tabs-right").onclick = () =>
+        tabs.scrollBy({left:direction * Math.max(70, tabs.clientWidth * 0.65), behavior:"smooth"});
+}
+tabs.addEventListener("scroll", updateTabArrows, {passive:true});
+window.addEventListener("resize", updateTabArrows);
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(updateTabArrows).observe(tabs);
 const tabOrderKey = "rundown-tab-order";
 const tabDragType = "application/x-rundown-tab";
 let draggedTab = null, tabScroll = 0, tabScrollFrame = 0;
 try {
     const savedOrder = JSON.parse(localStorage.getItem(tabOrderKey));
     if (Array.isArray(savedOrder)) {
-        for (const key of new Set([...savedOrder, ...panes])) {
+        const order = savedOrder.map(key => key === "categories" ? "folders" : key);
+        if (!order.includes("favorites") && order.includes("folders")) {
+            order.splice(order.indexOf("folders") + 1, 0, "favorites");
+        }
+        for (const key of new Set([...order, ...panes])) {
             if (panes.includes(key)) tabs.append(find("tab-" + key));
         }
     }
@@ -960,75 +1630,7 @@ for (const key of panes) {
         saveTabOrder();
     };
 }
-find("category-select").onchange = event => {
-    selectedCategory = event.target.value;
-    renderLists(last);
-};
-find("category-new").onclick = () => showCategoryDialog();
-function editSelectedCategory(deleting) {
-    if (!selectedCategory) return;
-    showCategoryDialog();
-    categoryEdit = {name:selectedCategory, deleting};
-    const input = find("category-name");
-    input.value = selectedCategory;
-    input.hidden = input.disabled = find("category-name-label").hidden = deleting;
-    find("category-dialog-title").textContent = deleting ? "Delete Category" : "Rename Category";
-    find("category-submit").textContent = deleting ? "Delete" : "Save";
-    const prompt = find("category-delete-prompt");
-    prompt.hidden = !deleting;
-    prompt.textContent = 'Delete “' + selectedCategory + '”? Its clips will stay in the File Library.';
-    if (deleting) find("category-cancel").focus();
-    else input.select();
-}
-find("category-rename").onclick = () => editSelectedCategory(false);
-find("category-delete").onclick = () => editSelectedCategory(true);
-find("category-create-new").onclick = () => {
-    setCategoryDialogMode(true);
-    find("category-name").focus();
-};
-find("category-cancel").onclick = () => find("category-dialog").close();
-find("category-form").onsubmit = async event => {
-    event.preventDefault();
-    const submit = event.currentTarget.querySelector('button[type="submit"]');
-    if (busy || submit.disabled) return;
-    submit.disabled = true;
-    try {
-        if (categoryEdit) {
-            const {name, deleting} = categoryEdit;
-            const title = find("category-name").value.trim();
-            if (await run(deleting ? "delete_category" : "rename_category", {category:name, title})) {
-                if (!deleting && last) {
-                    selectedCategory = title;
-                    renderLists(last);
-                }
-                find("category-dialog").close();
-            } else find("category-status").textContent = error;
-            return;
-        }
-        const picker = find("category-existing");
-        const category = picker.disabled ? find("category-name").value.trim() : picker.value;
-        if (!category) {
-            find("category-status").textContent = "Enter or select a category.";
-            return;
-        }
-        const clipId = categoryTarget;
-        if (await run(clipId ? "add_category" : "create_category", {id:clipId, category})) {
-            if (!clipId && last) {
-                selectedCategory = (last.categories || []).find(name => name.toLowerCase() === category.toLowerCase()) || selectedCategory;
-                renderLists(last);
-            }
-            find("category-dialog").close();
-        } else find("category-status").textContent = error;
-    } finally {
-        submit.disabled = false;
-    }
-};
 find("library-search").addEventListener("input", filterLibrary);
-find("library-category-filter").onchange = filterLibrary;
-find("library-search-mode").onchange = event => {
-    find("library-search").placeholder = event.target.value === "category" ? "Search category names…" : "Search clip names…";
-    filterLibrary();
-};
 // Some OBS browser builds deliver two text insertions for one physical keypress.
 let typedKey;
 document.addEventListener("keydown", event => {
@@ -1068,8 +1670,18 @@ document.addEventListener("pointerdown", event => { if (!event.target.closest("#
 document.addEventListener("keydown", event => { if (event.key === "Escape") find("row-menu").hidden = true; });
 let savedPane;
 try { savedPane = localStorage.getItem("rundown-active-tab"); } catch {}
+restoreLibraryLocation();
+if (savedPane === "categories") savedPane = "folders";
 selectPane(panes.includes(savedPane) ? savedPane : "queue");
-find("setup").onclick = () => run("setup");
+find("setup").onclick = () => {
+    if (last?.setup_existing) {
+        confirmAction("Use Existing Scene",
+            "Use Video Rundown and Rundown Player for rundown playback? This keeps the current scene layout.",
+            "setup", {adopt_existing:true});
+    } else {
+        run("setup");
+    }
+};
 find("play").onclick = () => last?.current
     ? confirmAction("Play Selected", "Replace the current on-air clip with the selected clip?", "play", {id:selected}, last.current)
     : run("play", {id:selected});
@@ -1083,5 +1695,6 @@ find("auto-cut").onchange = e => run("auto_cut", {value:e.target.value});
 find("cut").onclick = () => confirmAction("Cut to Preview", "Switch the Preview scene to Program now?", "cut", {}, last?.current);
 refresh();
 setInterval(refresh, 500);
+setInterval(pollFolderListing, 2000);
 setInterval(() => drawTime(performance.now()), 33);
 </script></body></html>

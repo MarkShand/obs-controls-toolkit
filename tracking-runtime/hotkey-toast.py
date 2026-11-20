@@ -1,6 +1,16 @@
 """Display the Windows version of the controls status toast."""
+import os
+from pathlib import Path
 import sys
 import tkinter as tk
+
+tcl = Path(sys.base_prefix) / "tcl"
+for variable, folder, script in (
+    ("TCL_LIBRARY", tcl / f"tcl{tk.TclVersion}", "init.tcl"),
+    ("TK_LIBRARY", tcl / f"tk{tk.TkVersion}", "tk.tcl"),
+):
+    if (folder / script).is_file():
+        os.environ.setdefault(variable, str(folder))
 
 status = sys.argv[1]
 enabled = status in ("RESUMED", "ON")
