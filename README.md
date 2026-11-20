@@ -1,4 +1,4 @@
-![Demo animation](assets/demo.gif)
+![Demo animation](assets/demo-file.gif)
 # OBS Control Toolkit
 
 OBS shortcut controls, FoMaKo camera tracking, and a Video Rundown with a media library, Cue and On Air previews, playback history, CSV reports, and JSON backups.
