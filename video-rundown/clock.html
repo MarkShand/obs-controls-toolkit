@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Production Clock</title>
+<style>
+:root{color-scheme:dark;--digits:#6cf5b2;--surface:#10141a}
+body{margin:0;background:var(--surface);color:#e0e8ee;font:13px system-ui,sans-serif}
+main{box-sizing:border-box;max-width:700px;margin:auto;padding:10px 12px;text-align:center}
+svg{display:block;width:100%;max-height:136px;fill:var(--digits)}
+.seg{opacity:.09}.seg.on,.punct{opacity:1}
+#date{font-size:clamp(10px,3vw,14px);margin:4px 0 0;letter-spacing:.06em}
+details{margin:8px 0 0;text-align:left;color:#d3dce7}summary{cursor:pointer;font-size:11px}
+.colors{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0}
+.colors label{display:flex;align-items:center;gap:4px}input[type=color]{width:28px;height:23px;padding:0;border:0}
+</style>
+<main>
+<svg id="clock" viewBox="0 0 451 66" role="img" aria-label="Local time"></svg>
+<p id="date"></p>
+<details><summary>Colors</summary><div class="colors">
+<label>Digits <input type="color" id="digits" value="#6cf5b2"></label>
+<label>Background <input type="color" id="surface" value="#10141a"></label>
+</div></details>
+</main>
+<script>
+const svg = document.querySelector("#clock");
+const ns = "http://www.w3.org/2000/svg";
+const shapes = [
+    "8,1 28,1 33,6 28,11 8,11 3,6",
+    "29,12 34,7 38,12 38,27 33,32 29,27",
+    "29,39 33,34 38,39 38,54 33,59 29,54",
+    "8,55 28,55 33,60 28,65 8,65 3,60",
+    "1,39 6,34 10,39 10,54 6,59 1,54",
+    "1,12 6,7 10,12 10,27 6,32 1,27",
+    "8,28 28,28 33,33 28,38 8,38 3,33"
+];
+const patterns = ["012345","12","01643","01236","5612","05623","056234","012","0123456","012356"];
+function shape(name, attrs, parent = svg) {
+    const element = document.createElementNS(ns, name);
+    for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
+    parent.append(element);
+    return element;
+}
+const cells = [0,43,103,146,206,249,306,338,370].map((x, index) => {
+    const group = shape("g", {transform:"translate("+x+" "+(index < 6 ? 0 : 14)+") scale("+(index < 6 ? 1 : .73)+")"});
+    return shapes.map(points => shape("polygon", {points, class:"seg"}, group));
+});
+for (const x of [93,196]) for (const y of [22,45]) shape("rect",{x:x-3,y:y-3,width:6,height:6,rx:1,class:"punct"});
+shape("rect",{x:292,y:53,width:7,height:7,rx:1,class:"punct"});
+const period = shape("text",{x:405,y:60,"font-size":21,"font-weight":700});
+const two = value => String(value).padStart(2,"0");
+const date = document.querySelector("#date");
+const dateFormat = new Intl.DateTimeFormat(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"});
+let shown = "", day = "";
+function tick() {
+    const now = new Date();
+    const hour = now.getHours();
+    const time = two(hour % 12 || 12)+two(now.getMinutes())+two(now.getSeconds())+String(now.getMilliseconds()).padStart(3,"0");
+    for (let i=0;i<time.length;i++) {
+        if (shown[i] === time[i]) continue;
+        cells[i].forEach((segment,j) => segment.classList.toggle("on",patterns[Number(time[i])].includes(String(j))));
+    }
+    if (shown.slice(0,6) !== time.slice(0,6)) {
+        period.textContent = hour < 12 ? "AM" : "PM";
+        svg.setAttribute("aria-label",time.slice(0,2)+":"+time.slice(2,4)+":"+time.slice(4,6)+" "+period.textContent);
+    }
+    shown = time;
+    const today = now.toDateString();
+    if (day !== today) { day = today; date.textContent = dateFormat.format(now); }
+    requestAnimationFrame(tick);
+}
+for (const key of ["digits","surface"]) {
+    const input = document.querySelector("#"+key);
+    try {
+        const saved = localStorage.getItem("production-clock-"+key);
+        if (saved && /^#[0-9a-f]{6}$/i.test(saved)) input.value = saved;
+    } catch {}
+    function update() {
+        document.documentElement.style.setProperty("--"+key,input.value);
+        try { localStorage.setItem("production-clock-"+key,input.value); } catch {}
+    }
+    input.addEventListener("input",update);
+    update();
+}
+tick();
+</script></html>
