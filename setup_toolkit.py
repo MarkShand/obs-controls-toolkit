@@ -44,7 +44,7 @@ def require_obs_closed():
             capture_output=True,
         )
     else:
-        result = subprocess.run(["/usr/bin/pgrep", "-x", "OBS"], capture_output=True)
+        result = subprocess.run(["/usr/bin/pgrep", "-x", "[Oo][Bb][Ss]"], capture_output=True)
     if result.returncode not in (0, 1) or result.stderr:
         raise OSError("Could not check whether OBS is open.")
     running = result.returncode == (1 if WINDOWS else 0)
@@ -249,6 +249,18 @@ def plan_websocket(config, enable_existing):
     return path, original, json_bytes(settings), "enabled"
 
 
+def clear_saved_rundown_input(scene):
+    changed = False
+    for source in scene.get("sources", []):
+        if not isinstance(source, dict) or source.get("name") != "Rundown Player" or source.get("id") != "ffmpeg_source":
+            continue
+        settings = source.get("settings")
+        if isinstance(settings, dict) and settings.get("obs_controls_toolkit_rundown") is True and settings.get("local_file"):
+            settings.pop("local_file")
+            changed = True
+    return changed
+
+
 def plan(config, camera=None, active_only=False, *, uninstall=False, enable_websocket=False):
     ini = config / "user.ini"
     if not ini.is_file():
@@ -285,6 +297,8 @@ def plan(config, camera=None, active_only=False, *, uninstall=False, enable_webs
             register_script(updated, TRACKING, {"camera_ip": camera} if camera else {}, add=bool(camera))
         if scripts != updated:
             scene.setdefault("modules", {})["scripts-tool"] = updated
+        cleared_rundown = not uninstall and clear_saved_rundown_input(scene)
+        if scripts != updated or cleared_rundown:
             changes[path] = (content, json_bytes(scene))
             changed_collections += 1
 
@@ -434,7 +448,7 @@ def main():
                                                         enable_websocket=enable_websocket)
 
         print(f"{'Remove' if args.uninstall else 'Add'} {docks} toolkit dock(s). "
-              f"{'Remove' if args.uninstall else 'Update'} toolkit scripts in {count} scene collection(s).")
+              f"{'Remove toolkit scripts from' if args.uninstall else 'Update toolkit settings in'} {count} scene collection(s).")
         if args.uninstall:
             print("OBS scenes, sources, profiles, WebSocket settings, toolkit files, and media are kept.")
         elif websocket == "disabled":

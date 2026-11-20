@@ -90,6 +90,21 @@ end
 
 local dock_server
 
+local function save_rundown_source(data)
+    local source = obs.calldata_source(data, "source")
+    if source == nil or obs.obs_source_get_name(source) ~= "Rundown Player"
+        or obs.obs_source_get_id(source) ~= "ffmpeg_source" then return end
+    local settings = obs.obs_source_get_settings(source)
+    if obs.obs_data_get_bool(settings, "obs_controls_toolkit_rundown")
+        and obs.obs_data_has_user_value(settings, "local_file") then
+        -- Default values stay available to the decoder but are omitted from the scene collection JSON.
+        local path = obs.obs_data_get_string(settings, "local_file")
+        obs.obs_data_set_default_string(settings, "local_file", path)
+        obs.obs_data_unset_user_value(settings, "local_file")
+    end
+    obs.obs_data_release(settings)
+end
+
 local function start_docks()
     local python = script_path() .. "../.venv/" .. (windows and "Scripts/python.exe" or "bin/python")
     local candidate = io.open(python, "rb")
@@ -244,12 +259,14 @@ function script_load(settings)
     obs.obs_data_array_release(movement_bindings)
     os.remove(runtime("hotkey-dock.toggle"))
     publish_state()
+    obs.signal_handler_connect(obs.obs_get_signal_handler(), "source_save", save_rundown_source)
     start_docks()
     obs.timer_add(check_toggle, 35)
 end
 
 function script_unload()
     obs.timer_remove(check_toggle)
+    obs.signal_handler_disconnect(obs.obs_get_signal_handler(), "source_save", save_rundown_source)
     if dock_server then
         libobs.os_process_pipe_destroy(dock_server)
         dock_server = nil

@@ -8,17 +8,39 @@ h1{font-size:16px;margin:0 auto 0 0}button{font:inherit;padding:5px 8px;border:1
 button[aria-pressed=true]{border-color:#69cfb2;color:#a7f0da}
 video,img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#080a0f;margin-top:9px}
 #seek{width:100%;accent-color:#69cfb2} [hidden]{display:none}p{color:#b9c7d8;overflow-wrap:anywhere}
+details{margin-top:12px;border-top:1px solid #394557;padding-top:9px}
+summary{cursor:pointer}form{display:flex;align-items:end;gap:8px;flex-wrap:wrap}
+label span{display:block;margin-bottom:4px}input[type=text],select{font:inherit;color:inherit;background:#202735;border:1px solid #46536a;border-radius:6px;padding:6px}
+#lan-access{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 12px;margin:10px 0}
+#lan-access[hidden]{display:none}#lan-access dd{margin:0;overflow-wrap:anywhere;user-select:all}
 </style>
-<body><header><h1>Rundown Preview</h1><button id="cue">Cue</button><button id="live">On Air</button></header>
+<body><header><h1>Rundown Preview</h1><button id="cue">Cue</button><button id="live">On Air</button>
+<label hidden>On Air mode <select id="air-mode"><option value="low">Low FPS</option><option value="smooth">Smooth + audio</option></select></label></header>
 <video id="video" controls autoplay muted playsinline preload="metadata" hidden></video>
+<video id="air-video" muted playsinline preload="auto" hidden></video>
 <img id="frame" alt="OBS media source monitor" hidden><div id="scrubber" hidden><label for="seek">On Air timeline</label>
 <input type="range" id="seek" min="0" max="1" value="0" step="1">
-<output id="seek-time"></output><p id="seek-error" role="status"></p></div><p id="status" role="status"></p><p id="preview-metadata" hidden></p>
+<output id="seek-time"></output><p id="seek-error" role="status"></p></div>
+<button id="air-audio" hidden>Unmute On Air</button><button id="air-play" hidden>Start monitor</button>
+<p id="status" role="status"></p><p id="preview-metadata" hidden></p>
+<details id="lan-settings"><summary>LAN monitor</summary>
+<p>Share Cue and On Air on a trusted local network. The monitor uses unencrypted HTTP.</p>
+<form id="lan-form" hidden>
+    <label id="lan-detected" hidden><span>This computer’s LAN address</span><select id="lan-address"></select></label>
+    <label id="lan-manual" hidden><span>This computer’s LAN IPv4</span><input id="lan-ip" type="text" inputmode="decimal" placeholder="192.168.1.50"></label>
+    <button>Enable monitor</button>
+</form>
+<dl id="lan-access" hidden><dt>Address</dt><dd id="lan-url"></dd><dt>Username</dt><dd id="lan-user"></dd><dt>Access code</dt><dd id="lan-password"></dd></dl>
+<button id="lan-disable" hidden>Disable monitor</button><p id="lan-message" role="status"></p>
+</details>
+<script src="/on-air.js"></script>
 <script>
 const el = id => document.getElementById(id);
-const video = el("video"), frame = el("frame");
-let mode = "cue", loaded, latest, framePending = false;
+const video = el("video");
+const drawOnAir = createOnAirMonitor(draw);
+let mode = "cue", loaded, latest, receivedAt = 0, networkDelay = 0, requestSerial = 0, appliedSerial = 0;
 const token = "__TOKEN__";
+const jsonHeaders = {"Content-Type":"application/json", "X-Rundown":token};
 const seek = el("seek");
 let scrubbing = false, seekClip, seeking = false;
 function timeLabel(ms) {
@@ -52,6 +74,33 @@ seek.onchange = async () => {
     }
 };
 let observedCueRevision, lastCueRevision, cueStatus = "", playAttempt = 0;
+const cueOwner = Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, "0")).join("");
+let cueRequest = false, cueSample;
+
+async function sendCueClock() {
+    if (cueRequest || !cueSample) return;
+    cueRequest = true;
+    const sample = cueSample;
+    cueSample = null;
+    try {
+        await fetch("/cue-clock", {method:"POST", headers:jsonHeaders, body:JSON.stringify(sample)});
+    } catch {} finally {
+        cueRequest = false;
+        if (cueSample) sendCueClock();
+    }
+}
+
+function publishCue(forcePaused = false) {
+    if (!latest?.lan_monitor_enabled || mode !== "cue" || !loaded || !Number.isFinite(video.currentTime)) return;
+    cueSample = {owner:cueOwner, id:loaded, revision:lastCueRevision ?? 0,
+        position:video.currentTime, playing:!forcePaused && !video.paused && !video.ended && !video.seeking && video.readyState >= 3};
+    sendCueClock();
+}
+
+for (const event of ["playing", "pause", "seeking", "seeked", "waiting", "ended"]) {
+    video.addEventListener(event, () => publishCue());
+}
+setInterval(publishCue, 900);
 
 function playCue() {
     const attempt = ++playAttempt;
@@ -65,19 +114,28 @@ function playCue() {
 }
 function draw() {
     const state = latest;
-    if (!state) return;
+    if (!state) {
+        drawOnAir(null, mode === "live", receivedAt, networkDelay);
+        el("scrubber").hidden = video.hidden = el("preview-metadata").hidden = true;
+        video.pause();
+        el("status").textContent = "Video Rundown is offline.";
+        return;
+    }
     if (state.cue_revision !== observedCueRevision) {
         observedCueRevision = state.cue_revision;
-        if (state.library?.some(item => item.id === state.cue)) mode = "cue";
+        if (state.cue_from_library) mode = "cue";
     }
     el("cue").setAttribute("aria-pressed", mode === "cue");
     el("live").setAttribute("aria-pressed", mode === "live");
-    let clip = [...state.queue, ...(state.library || [])].find(item => item.id === (mode === "cue" ? (state.cue || state.queue.find(item => item.media_status === "ready")?.id) : state.current));
-    const media = state.library?.find(item => item.id === (clip?.media_id || clip?.id));
-    const {width, height, fps, format, codec, size_bytes, created_at, modified_at, cached_modified} = media?.metadata || {};
+    const air = state.on_air;
+    const airDetail = drawOnAir(air, mode === "live", receivedAt, networkDelay);
+    let clip = state.cue_clip;
+    const duration = mode === "cue" ? clip?.duration_ms : air?.duration;
+    const {width, height, fps, format, codec, size_bytes, created_at, modified_at, cached_modified} =
+        (mode === "cue" ? state.cue_metadata : state.air_metadata) || {};
     const details = [
-        media?.missing && "Missing file",
-        clip?.duration_ms && timeLabel(clip.duration_ms),
+        mode === "cue" && clip?.missing && "Missing file",
+        duration && timeLabel(duration),
         width && height && width + "×" + height,
         fps && fps + " fps", format, codec?.toUpperCase(),
         size_bytes && (size_bytes / 1024**2).toFixed(1) + " MB",
@@ -101,34 +159,89 @@ function draw() {
         }
         else { video.removeAttribute("src"); video.load(); }
     }
-    const showFrame = mode === "live" && state.program && clip && ["Playing", "Paused"].includes(state.status);
-    el("scrubber").hidden = !showFrame || !state.duration;
-    seek.disabled = seeking || !showFrame || !state.duration;
-    if (!scrubbing && !seeking && showFrame && state.duration) {
-        seek.max = state.duration;
-        seek.value = state.cursor;
-        el("seek-time").textContent = timeLabel(state.cursor) + " / " + timeLabel(state.duration);
+    const showTimeline = mode === "live" && Boolean(air?.duration);
+    el("scrubber").hidden = !showTimeline;
+    seek.disabled = seeking || !showTimeline;
+    if (!scrubbing && !seeking && showTimeline) {
+        seek.max = air.duration;
+        seek.value = Math.trunc(air.cursor);
+        el("seek-time").textContent = timeLabel(Number(seek.value)) + " / " + timeLabel(air.duration);
     }
-    if (!showFrame) frame.hidden = true;
-    if (showFrame && !framePending) {
-        framePending = true;
-        frame.src = "/frame?t=" + Date.now();
-    }
-    el("status").textContent = clip ? clip.name + (mode === "live" ? " · Silent OBS monitor" : video.error ? " · Preview codec unavailable in this dock. OBS may still play it." : cueStatus)
-        : mode === "cue" ? "Select a clip in Video Rundown." : "No rundown clip on Program.";
+    el("status").textContent = mode === "live" ? (air ? air.name + " · " + airDetail : "No rundown clip on Program.")
+        : (clip ? clip.name + (video.error ? " · Preview codec unavailable in this dock. OBS may still play it." : cueStatus)
+            : "Select a clip in Video Rundown.");
 }
-frame.onload = () => { framePending = false; frame.hidden = mode !== "live" || !latest?.program || !["Playing","Paused"].includes(latest.status); };
-frame.onerror = () => { framePending = false; frame.hidden = true; };
 video.onerror = draw;
 el("cue").onclick = () => { if (mode !== "cue") loaded = undefined; mode = "cue"; draw(); };
-el("live").onclick = () => { mode = "live"; draw(); };
+el("live").onclick = () => { publishCue(true); mode = "live"; draw(); };
 async function refresh() {
+    const serial = ++requestSerial, began = performance.now(), controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
     try {
-        const response = await fetch("/state", {cache:"no-store"});
-        latest = await response.json();
-        draw();
-    } catch { el("status").textContent = "Video Rundown is offline."; }
+        const response = await fetch("/preview-state", {cache:"no-store", signal:controller.signal});
+        if (!response.ok) throw new Error();
+        const sample = await response.json();
+        if (serial < appliedSerial) return;
+        receivedAt = performance.now();
+        networkDelay = Math.min(250, (receivedAt - began) / 2);
+        latest = sample;
+    } catch {
+        if (serial < appliedSerial) return;
+        latest = null;
+        loaded = undefined;
+    } finally { clearTimeout(timeout); }
+    appliedSerial = serial;
+    draw();
 }
+
+const lanAddresses = el("lan-address"), manualIP = el("lan-ip");
+function showManualAddress() {
+    manualIP.required = !lanAddresses.value;
+    el("lan-manual").hidden = !manualIP.required;
+}
+lanAddresses.onchange = showManualAddress;
+
+async function monitorSettings(change) {
+    const message = el("lan-message");
+    const enable = el("lan-form").querySelector("button"), disable = el("lan-disable");
+    enable.disabled = disable.disabled = true;
+    try {
+        const response = await fetch("/lan-monitor", change
+            ? {method:"POST", headers:jsonHeaders, body:JSON.stringify(change)}
+            : {headers:{"X-Rundown":token}, cache:"no-store"});
+        const config = await response.json();
+        if (!response.ok) throw new Error(config.error || "LAN monitor settings are unavailable.");
+        el("lan-form").hidden = config.enabled;
+        el("lan-access").hidden = disable.hidden = !config.enabled;
+        el("lan-url").textContent = config.url || "";
+        el("lan-user").textContent = config.username || "";
+        el("lan-password").textContent = config.password || "";
+        if (config.enabled) {
+            manualIP.value = config.address;
+        } else {
+            const previous = lanAddresses.value || manualIP.value;
+            const addresses = config.addresses || [];
+            lanAddresses.replaceChildren(...addresses.map(address => new Option(address, address)),
+                new Option("Enter an IP address…", ""));
+            el("lan-detected").hidden = addresses.length === 0;
+            if (addresses.includes(previous)) lanAddresses.value = previous;
+            showManualAddress();
+        }
+        message.textContent = config.error || (config.enabled ? "Open this address in a browser on the other computer." : "");
+    } catch (error) {
+        message.textContent = error.message;
+    } finally {
+        enable.disabled = disable.disabled = false;
+    }
+}
+el("lan-settings").ontoggle = () => {
+    if (el("lan-settings").open) monitorSettings();
+};
+el("lan-form").onsubmit = event => {
+    event.preventDefault();
+    monitorSettings({enabled:true, address:lanAddresses.value || manualIP.value});
+};
+el("lan-disable").onclick = () => monitorSettings({enabled:false});
 refresh();
 setInterval(refresh, 450);
 </script></body></html>

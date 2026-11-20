@@ -5,19 +5,21 @@ OBS shortcut controls, FoMaKo camera tracking, and a Video Rundown with a media 
 ## Set up once
 
 1. Install **OBS Studio 31 or newer**. Open OBS once to create its settings, then quit OBS.
-2. Extract the toolkit to a folder you plan to keep, such as Documents. Double-click the setup file for your computer.
+2. Extract the toolkit to a folder you plan to keep, such as Documents. Run the setup command for your computer from the toolkit folder.
 
    | Computer | Setup file |
    | --- | --- |
    | Windows | `Setup-Windows.cmd` |
-   | Mac | `Setup-Mac.command` |
+   | Mac | `bash ./Setup-Mac.command` in Terminal |
 
 3. Follow the prompts. On Windows, Setup uses an existing Python 3.10 or newer with Tcl/Tk when available. Otherwise it downloads and installs 64-bit Python with Tcl/Tk for your Windows user. On Mac, install Python 3.10 or newer before running Setup. Enter your FoMaKo camera's IPv4 address if you use tracking. Press Enter to skip it or keep your existing camera settings.
 4. When Setup finishes, open OBS. Choose **Docks → Video Rundown** and click **Set up scene** once per scene collection you use. If the dock offers **Use existing scene**, confirm only if the existing scene and player are your rundown pair. Import clips into **File Library**, then add them to **Playlist**.
 
 Setup adds **OBS Controls**, **Video Rundown**, **Rundown Preview**, and **Production Clock** to the Docks menu. It adds toolkit script registrations to existing scene collections and preserves other scripts and dock entries. An enabled OBS WebSocket keeps its current port, password, and authentication settings. If WebSocket already exists and is disabled, Setup asks before enabling it with password protection. The dock services start when OBS loads the toolkit script and stop when it unloads. You can close Setup after installation.
 
-Internet access is needed on the first run to download Python packages. If Finder will not open the Mac launcher, open Terminal in the extracted toolkit folder and run `bash ./Setup-Mac.command`. Mac notification popups use the optional Xcode Command Line Tools. Install those tools and rerun Setup if you want the popups.
+On macOS, the Lua runtime expects OBS at `/Applications/OBS.app`. Use an OBS build and Python distribution for your Mac’s architecture. Media drives and protected folders must be accessible to OBS and its Python helper. File and folder choices open the system picker directly. Windows uses the modern Explorer dialog and macOS uses its native file and folder dialogs.
+
+Internet access is needed on the first run to download Python packages. Mac notification popups use the optional Xcode Command Line Tools. Install those tools and rerun Setup if you want the popups.
 
 ## Using the toolkit
 
@@ -34,7 +36,7 @@ Setup stores backups of any changed OBS settings under `toolkit-setup-backups` i
 
 ## Uninstall
 
-Quit OBS completely. From the folder used for Setup, run **Uninstall-Windows.cmd** on Windows or **Uninstall-Mac.command** on macOS. From PowerShell or Terminal, preview the changes first if you wish.
+Quit OBS completely. From the folder used for Setup, run **Uninstall-Windows.cmd** on Windows or `bash ./Uninstall-Mac.command` in macOS Terminal. From PowerShell or Terminal, preview the changes first if you wish.
 
 - Windows PowerShell — `.\Uninstall-Windows.cmd --dry-run`
 - macOS Terminal — `bash ./Uninstall-Mac.command --dry-run`
