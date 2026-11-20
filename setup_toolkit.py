@@ -165,13 +165,14 @@ def dock_identity(dock):
         return None
 
 
-def read_install_record(path):
+def read_install_record(path, previous_root=None):
     original = read_optional(path)
     if original is None:
         return original, set()
     record = json.loads(original)
+    recorded = record.get("toolkit_folder")
     if (record["version"] != 1 or not isinstance(record["docks"], list)
-            or not same_path(record.get("toolkit_folder"), ROOT)):
+            or not (same_path(recorded, ROOT) or same_path(recorded, previous_root))):
         raise ValueError("The toolkit installation record belongs to another folder or is invalid. "
                          "Run Uninstall from the folder used for Setup.")
     pairs = {dock_identity(dock) for dock in record["docks"]}
@@ -261,7 +262,8 @@ def clear_saved_rundown_input(scene):
     return changed
 
 
-def plan(config, camera=None, active_only=False, *, uninstall=False, enable_websocket=False):
+def plan(config, camera=None, active_only=False, *, uninstall=False, enable_websocket=False,
+         previous_root=None, rundown_data=None):
     ini = config / "user.ini"
     if not ini.is_file():
         raise ValueError("The OBS user.ini file was not found. Check the OBS configuration folder.")
@@ -293,7 +295,17 @@ def plan(config, camera=None, active_only=False, *, uninstall=False, enable_webs
             updated = [entry for entry in scripts if not toolkit_script(entry)]
         else:
             updated = json.loads(json.dumps(scripts))
-            register_script(updated, HOTKEYS, {"toolkit_obs_config": str(config)}, add=True)
+            if previous_root is not None:
+                for entry in updated:
+                    if not isinstance(entry, dict):
+                        continue
+                    for name in (HOTKEYS, TRACKING):
+                        if same_path(entry.get("path"), previous_root / "outputs" / name):
+                            entry["path"] = script_path(name).as_posix()
+            options = {"toolkit_obs_config": str(config)}
+            if rundown_data is not None:
+                options["toolkit_rundown_data"] = str(rundown_data)
+            register_script(updated, HOTKEYS, options, add=True)
             register_script(updated, TRACKING, {"camera_ip": camera} if camera else {}, add=bool(camera))
         if scripts != updated:
             scene.setdefault("modules", {})["scripts-tool"] = updated
@@ -303,7 +315,7 @@ def plan(config, camera=None, active_only=False, *, uninstall=False, enable_webs
             changed_collections += 1
 
     record = config / INSTALL_RECORD
-    previous_record, owned = read_install_record(record)
+    previous_record, owned = read_install_record(record, previous_root)
     # Leave unidentified legacy docks available for manual removal.
     if previous_record is None:
         owned.update(legacy_docks(config, docks, current_scripts))
@@ -321,7 +333,7 @@ def plan(config, camera=None, active_only=False, *, uninstall=False, enable_webs
         if added:
             changes[ini] = (original, write_dock_list(original, docks))
             owned.update(dock_identity(dock) for dock in added)
-        if owned and (previous_record is None or added):
+        if (owned or rundown_data is not None) and (previous_record is None or added or previous_root is not None):
             record_bytes = json_bytes({
                 "version": 1, "toolkit_folder": str(ROOT),
                 "docks": [{"uuid": uid, "url": url} for uid, url in sorted(owned)],

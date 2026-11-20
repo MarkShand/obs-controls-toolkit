@@ -32,6 +32,8 @@ def serve(target, stop):
 def main():
     if len(sys.argv) > 1 and sys.argv[1]:
         os.environ["OBS_TOOLKIT_CONFIG_DIR"] = sys.argv[1]
+    if len(sys.argv) > 2 and sys.argv[2]:
+        os.environ["OBS_TOOLKIT_RUNDOWN_DATA"] = sys.argv[2]
     with (RUNTIME / "toolkit.log").open("w", encoding="utf-8", buffering=1) as log:
         sys.stdout = sys.stderr = log
         stop = threading.Event()

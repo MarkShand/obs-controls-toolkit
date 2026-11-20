@@ -22,6 +22,6 @@ return function(runtime, status)
     local candidate = io.open(python, "rb")
     if not candidate then return end
     candidate:close()
-    local args = '"' .. runtime .. 'hotkey-toast.py" ' .. status
+    local args = '-B "' .. runtime .. 'hotkey-toast.py" ' .. status
     shell.ShellExecuteW(nil, nil, wide(python:gsub("/", "\\")), wide(args), nil, 0)
 end
